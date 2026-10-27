@@ -41,6 +41,11 @@ $logs = Join-Path $env:LOCALAPPDATA "Firaxis Games\Sid Meier's Civilization VI\L
 foreach ($f in "Profile.csv", "net_message_debug.log", "Lua.log", "Modding.log") {
     Copy-Item (Join-Path $logs $f) $dir -ErrorAction SilentlyContinue
 }
+# Dernière sauvegarde automatique, pour comparer l'état de jeu entre configurations (compare_saves.py).
+$saves = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "My Games\Sid Meier's Civilization VI\Saves"
+Get-ChildItem (Join-Path $saves "*\auto\AutoSave_*.Civ6Save") -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -ge $t0 } | Sort-Object LastWriteTime | Select-Object -Last 1 |
+    Copy-Item -Destination $dir
 @{ name = $Name; start = $t0.ToString("o"); stop = $t1.ToString("o"); with_io = [bool]$WithIO } |
     ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $dir "capture.json")
 Write-Host "Capture écrite dans $dir"

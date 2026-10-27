@@ -136,3 +136,64 @@ boucle principale :
   - ou **détourner des fonctions de l'exe**, ce que le proxy peut faire aussi : il est dans le même
     processus. Mais l'exe n'a pas de symboles, et il faudrait d'abord nommer `0x7795f` et ses
     branches.
+
+## Les trois fronts remplacés : tour 78 → 79 (capture du 2026-10-27, 22:33)
+
+Même sauvegarde, proxy en `mode=coalesce`, `portee=message`, `ameliorations=quiet`,
+`rendements=fast`. La sauvegarde du tour 80 ne s'écarte de la référence `runs/mesure` que du bruit
+habituel (38 587 octets en 22 zones, contre 38 641 entre deux parties non modifiées).
+
+| capture | passage (s) | fenêtre (s) | CPU du processus (s) | thread GameCore, CPU (ms) | arbre `18004afc0` (ms) |
+|---|---:|---:|---:|---:|---:|
+| `tour79` (jeu non modifié) | 9 | 10 | 54,0 | 6 904 | 6 102 |
+| `tour79-coalesce` | 6 | 7 | 39,6 | 4 478 | 4 027 |
+| `tour79-quiet` (+ améliorations) | 5 | 6 | 33,9 | 3 217 | 3 121 |
+| `tour79-remplacement` (+ diplo, portée message, rendements) | 4 | 5 | 27,8 | 2 424 | 2 174 |
+
+Par chaîne, entre `tour79-quiet` et `tour79-remplacement` :
+
+| chaîne | quiet | remplacement |
+|---|---:|---:|
+| cascade diplomatique (`18042dc40`) | 680 ms | 247 ms |
+| attente des tâches de l'IA (`1809922c0`, sous le détour de `1804a16e0`) | 595 ms | 478 ms |
+| dont `CityBuild` → `Value_Manager` | 278 ms | 156 ms |
+| `Player_Units` (`180344a30`) | 553 ms | 321 ms |
+
+**Le goulot est maintenant le thread principal de l'exe.** Sur la fenêtre de 5 s, le thread GameCore
+passe 2,29 s hors CPU, dont 2,23 s dans sa boucle d'attente (`exe+0x999dbe`), réveillé par le thread
+principal (`exe+0x6ff769` → `0x76c3a` → `0x77d65` → `0x999ce6`). La plus longue attente dure 473 ms.
+GameCore ne calcule plus que la moitié du passage ; le reste attend le traitement des événements,
+l'interface Lua et le rendu côté exe.
+
+## Banc de comparaison : tours 78 → 80, proxy retiré / proxy complet (2026-10-27, 22:55 → 23:06)
+
+Quatre captures WPR (`captures/*-bench-*`), en alternance : sans proxy (`-Uninstall`), puis proxy en
+`mode=coalesce`, `portee=message`, `ameliorations=quiet`, `rendements=quiet`, deux fois chacun (sauvegardes
+du tour 80 dans `runs/bench-*`). Chaque
+capture couvre les deux passages, de `AutoSave_0078` jusqu'à la main au tour 80. `analyze.py` mesure
+maintenant chaque passage à la milliseconde, d'après l'activité du thread GameCore (section « Passages
+mesurés dans la trace »).
+
+| passage | sans proxy (1 / 2) | avec proxy (1 / 2) | moyenne sans → avec |
+|---|---:|---:|---:|
+| 78 → 79 | 9 483 / 9 327 ms | 4 245 / 4 586 ms | 9 405 → 4 416 ms (−53 %) |
+| 79 → 80 | 5 923 / 6 124 ms | 4 977 / 4 154 ms | 6 024 → 4 566 ms (−24 %) |
+| **total** | 15 406 / 15 450 ms | 9 222 / 8 740 ms | **15 428 → 8 981 ms (−42 %)** |
+| CPU du thread GameCore | 10 547 / 10 606 ms | 4 275 / 4 193 ms | −60 % |
+| CPU du processus | 81,4 / 82,1 s | 48,5 / 44,9 s | −43 % |
+
+Dans la passe 1 avec proxy, le tour 79 a été fini dans la seconde où la main est revenue : la
+répartition entre les deux passages y est approximative (à une demi-seconde près), pas le total. La
+sauvegarde automatique reste à environ 492 ms par tour dans les deux configurations.
+
+**État de jeu.** Deux passes de même configuration diffèrent de 2 763 octets (sans proxy) et
+2 747 (avec). Entre configurations, l'écart est d'environ 38 700 octets, dont 35 971 suivent
+l'alternance. Ce n'est pas le proxy : une zone de 56 Kio (avec l'ordre de deux valeurs répété six
+fois) bascule d'une passe à l'autre, dans l'ordre chronologique, quelle que soit la configuration. Sur
+les passes de l'après-midi, le test par groupes le montre : 35 973 octets suivent la parité des passes
+(`count`, `coalesce2` / `coalesce`, `count2`) et 0 le mode (`count`, `count2` / `coalesce`,
+`coalesce2`). Cause probable, non vérifiée : `AutoSave_0078` est une sauvegarde de fin du tour 77 que
+le jeu réécrit à chaque chargement, si bien que chaque passe part de celle réécrite par la précédente.
+Un redémarrage du jeu une fois sur deux ne l'explique pas ici : les quatre passes du banc ont toutes
+redémarré le jeu. Copie fixe de départ pour les prochains bancs : `runs/depart/AutoSave_0078.Civ6Save`
+(celle écrite par la dernière passe avec proxy), à remettre dans `Saves\Multi\auto` avant chaque passe.

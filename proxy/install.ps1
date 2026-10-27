@@ -8,9 +8,15 @@
 param(
     [ValidateSet("coalesce", "count", "off")]
     [string]$Mode = "coalesce",
+    # Portée du regroupement des instantanés : cascade de guerres seulement, ou chaque passe de message.
+    [ValidateSet("cascade", "message")]
+    [string]$Portee = "cascade",
     # Détour de 180260720 (amélioration constructible) : voir src/improvements.rs.
     [ValidateSet("off", "count", "verify", "fast", "quiet")]
     [string]$Ameliorations = "off",
+    # Mémoire de 18037ec60 (rendement d'une case) pendant les attentes de l'IA : voir src/rendements.rs.
+    [ValidateSet("off", "count", "verify", "fast", "quiet")]
+    [string]$Rendements = "off",
     [switch]$Uninstall,
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI"
 )
@@ -56,6 +62,6 @@ if (-not (Test-Ours $dll)) {
     Rename-Item $dll (Split-Path $orig -Leaf)
 }
 Copy-Item $built $dll -Force
-Set-Content -Encoding ascii $cfg "mode=$Mode", "ameliorations=$Ameliorations"
-Write-Host "Proxy installé dans $bin (mode $Mode, ameliorations $Ameliorations) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
+Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements"
+Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
 Write-Host "Journal : $env:LOCALAPPDATA\Civ6RolloverProxy\RolloverProxy.log"

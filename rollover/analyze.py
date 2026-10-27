@@ -48,12 +48,14 @@ def turn_transitions(net_log):
     """Un passage par tour : fin du tour précédent, début du tour, activation de chaque joueur
     jusqu'au joueur local. Les horodatages du jeu sont à la seconde."""
     out, cur = [], None
-    end = None
+    end = click = None
     for t, msg in read_log(net_log):
-        if msg.startswith("Game Turn Ended:"):
+        if msg == f"Player {LOCAL_PLAYER} set TurnActive 0, TurnActiveCount: 0":
+            click = t  # le joueur local finit son tour : le passage commence
+        elif msg.startswith("Game Turn Ended:"):
             end = t
         elif msg.startswith("Game Turn: "):
-            cur = {"tour": int(msg.split()[-1]), "fin": end, "debut": t, "joueurs": []}
+            cur = {"tour": int(msg.split()[-1]), "clic": click, "fin": end, "debut": t, "joueurs": []}
         elif cur:
             m = re.match(r"Player (\d+) set TurnActive 1", msg)
             if not m:
@@ -63,7 +65,7 @@ def turn_transitions(net_log):
             if player == LOCAL_PLAYER:
                 cur["main"] = t
                 out.append(cur)
-                cur, end = None, None
+                cur, end, click = None, None, None
     return out
 
 
@@ -160,7 +162,57 @@ class Functions:
         return " ".join(x for x in (f"`{a}`", where, hint and f"« {hint} »", lua and f"lua:{lua}") if x)
 
 
-def trace_report(etl, lines, window):
+def passages_report(game, trans, module, ms, freq, lines):
+    """Durée de chaque passage à la milliseconde, d'après l'activité du thread GameCore : il est
+    presque inactif quand le joueur a la main. Le passage va du premier échantillon qui suit la fin
+    du tour du joueur local (journaux à la seconde) au dernier avant une seconde d'inactivité, une
+    fois le joueur local réactivé, ou avant la seconde où il finit le tour suivant : s'il clique dès
+    qu'il a la main, la fin du passage (mise en place de son tour) est coupée, à moins d'une seconde près."""
+    by_gc = collections.Counter(s[1] for s in game if module(s[2]) == GAMECORE)
+    if not by_gc:
+        return
+    gc_tid = by_gc.most_common(1)[0][0]
+    gct = [s for s in game if s[1] == gc_tid]
+    idle = freq  # une seconde, en unités QPC
+    rows = []
+    starts = [tr["clic"] or tr["fin"] for tr in trans]
+    for i, tr in enumerate(trans):
+        lo = starts[i]
+        if not lo:
+            continue
+        nxt = next((t for t in starts[i + 1:] if t), None)
+        g = [s for s in gct if s[3] >= lo and (nxt is None or s[3] < nxt)]
+        if not g:
+            continue
+        end, cut = None, nxt is None
+        for x, y in zip(g, g[1:]):
+            if y[0] - x[0] >= idle and x[3] >= tr["main"]:
+                end, cut = x, False
+                break
+        if end is None:
+            end = g[-1]
+            if nxt is None:
+                # Plus d'activité jusqu'à la fin de la capture : tronqué si elle s'arrête moins d'une seconde après.
+                cut = game[-1][0] - g[-1][0] < idle
+        a, b = g[0][0], end[0]
+        cpu = sum(1 for s in game if a <= s[0] <= b)
+        n_gc = sum(1 for s in gct if a <= s[0] <= b)
+        rows.append((tr["tour"], g[0][3], (b - a) / freq * 1000, n_gc * ms, cpu * ms / 1000, cut))
+    if not rows:
+        return
+    lines.append(f"### Passages mesurés dans la trace (thread GameCore {gc_tid}, à la milliseconde)\n")
+    lines.append("| tour | début | durée (ms) | CPU thread GameCore (ms) | CPU processus (s) |")
+    lines.append("|---:|---|---:|---:|---:|")
+    for tour, t, d, g, c, cut in rows:
+        note = " (tronqué : capture arrêtée avant la fin)" if cut else ""
+        lines.append(f"| {tour} | {t:%H:%M:%S.%f}"[:-3] + f" | {d:.0f}{note} | {g:.0f} | {c:.1f} |")
+    if len(rows) > 1:
+        lines.append(f"| total | | {sum(r[2] for r in rows):.0f} | {sum(r[3] for r in rows):.0f} | "
+                     f"{sum(r[4] for r in rows):.1f} |")
+    lines.append("")
+
+
+def trace_report(etl, lines, window, trans):
     tr = load_trace(etl)
     ms = (tr.interval_100ns or 10000) / 10000
     start_utc = dt.datetime(1601, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(microseconds=tr.start_filetime / 10)
@@ -198,14 +250,8 @@ def trace_report(etl, lines, window):
             return r["adresse"] if r else None
         return None
 
-    ours = []
-    for qpc, tid, ip in tr.samples:
-        if tr.thread_pid.get(tid) != pid:
-            continue
-        t = wall(qpc)
-        if window and not (window[0] <= t < window[1]):
-            continue
-        ours.append((qpc, tid, ip, t))
+    game = [(qpc, tid, ip, wall(qpc)) for qpc, tid, ip in tr.samples if tr.thread_pid.get(tid) == pid]
+    ours = [s for s in game if not window or window[0] <= s[3] < window[1]]
     if not ours:
         lines.append("Aucun échantillon du jeu dans la fenêtre.\n")
         return
@@ -222,6 +268,7 @@ def trace_report(etl, lines, window):
     n_stack = sum(1 for s in ours if (s[0], s[1]) in tr.stacks)
     lines.append(f"- {civ[0][3]} (pid {pid}) : {len(ours)} échantillons à {ms:g} ms, "
                  f"soit {len(ours) * ms / 1000:.1f} s de CPU ; {n_stack} avec pile.\n")
+    passages_report(game, trans, module, ms, tr.perf_freq, lines)
 
     by_thread = collections.Counter(s[1] for s in ours)
     gc_thread = collections.Counter(s[1] for s in ours if module(s[2]) == GAMECORE)
@@ -330,7 +377,7 @@ def main():
         if trans and trans[-1]["fin"] and not args.tout:
             # Les journaux sont à la seconde : on borne large d'une seconde de chaque côté.
             window = (trans[-1]["fin"], trans[-1]["main"] + dt.timedelta(seconds=1))
-        trace_report(etl, lines, window)
+        trace_report(etl, lines, window, trans)
     out = args.out or args.dossier / "rapport.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     print(out)

@@ -210,6 +210,52 @@ threads :
   mais une mémorisation par (joueur, amélioration) devrait être invalidée chaque fois qu'une
   technologie ou un dogme change.
 
+## Troisième série : instantané diplomatique, portée « message », rendements des cases
+
+Trois chantiers menés ensemble, chacun avec son réglage et sa boucle count → verify → remplacement.
+
+**1. Instantané diplomatique** (`1800b7630(événement, joueur)`, `Cache_Player_Diplomacy`).
+- Pour un joueur, il relit une quinzaine d'accesseurs diplomatiques envers chaque autre joueur.
+  Il appelle aussi `1801d02d0`, qui construit à chaque fois les infobulles traduites (jusqu'à
+  9 `Localization::Lookup`).
+- Coût : 355 des 480 ms qui restaient dans la cascade du tour 79 (capture quiet).
+- Les 13 accesseurs décompilés ne font que lire l'état de jeu. La réserve `DAT_180b8bc10` n'est
+  référencée que par `Cache_Player_Diplomacy` et par l'initialisation statique.
+- Il est regroupé avec l'instantané des villes, dans la même liste, au même moment.
+
+**2. Portée `message`** (`portee=cascade|message`, `-Portee`).
+- En plus de DeclareWar, une passe de `18004afc0` (Game_Processor, appelée par `18063e2e0` pour
+  chaque message `GameUpdate`) ouvre une portée.
+- Les instantanés demandés hors cascade (gouverneurs, ressources, accords, fin de tour : ≈ 430 ms
+  de villes) sont alors regroupés aussi.
+- La portée se ferme avant `18007bbe0`, qui expédie les caches à l'interface.
+- Une cascade imbriquée dans une passe est journalisée avec la passe entière.
+- Les autres passes forment une ligne `passes …` par rafale (une seconde sans passe).
+
+**3. Rendements des cases** (`18037ec60`, Rules_Yield, `rendements=off|count|verify|fast|quiet`,
+`-Rendements`) : [src/rendements.rs](src/rendements.rs).
+- **Ce que fait la fonction.** Elle lit la case, ses 6 voisines et des tables de règles, en entiers.
+  C'est la feuille la plus chaude de l'évaluation des IA : ≈ 150 ms par passage, surtout dans les
+  tâches parallèles de CityBuild et Homeland.
+- **Quand on mémorise.** Seulement pendant `1804a16e0`, l'attente des tâches de l'IA. Le thread
+  GameCore n'y fait qu'exécuter des tâches, et le moteur interdit d'y modifier l'état
+  (`IsProcessingAi`).
+  - Chaque attente ouvre une génération neuve.
+  - Seule une vraie case de la carte sert de clé : la case doit être celle que la carte rend pour
+    ses coordonnées.
+- **Le remplacement de l'attente.** Le prologue de `1804a16e0` contient un `lea` relatif à RIP. Le
+  détour la remplace donc entièrement : il refait l'appel à `EXP_JobManager_Wait`, la remise à zéro
+  de `+0x38ac` et la notification au moteur.
+- **Le journal.** Une ligne `rendements …` par rafale : appels, dont pendant l'attente, sur une vraie
+  case (`cases_carte`), trouvés en mémoire, et écarts (en `verify`).
+
+**Protocole.** Même départ qu'avant : `AutoSave_0078` → tour 80, sans rien jouer.
+
+| étape | installation | à relever |
+|---|---|---|
+| mesure | `-Mode count -Portee message -Ameliorations quiet -Rendements verify` | lignes `cascade`, `passes` (demandés contre uniques) et `rendements` (`trouves`, `ecarts` = 0 ?), `AutoSave_0080` |
+| remplacement | `-Mode coalesce -Portee message -Ameliorations quiet -Rendements fast` | durées de passage, `AutoSave_0080` comparée à celle de la mesure (`compare_saves.py`), puis contrôle de synchronisation en ligne |
+
 ## Limites du prototype
 
 - **Un seul build du jeu.** Les adresses sont celles de GameCore_XP2 FinalRelease
@@ -221,5 +267,8 @@ threads :
   cascade, il serait exécuté normalement.
 - **Interface momentanément en retard.** Pendant la cascade, les infobulles de villes ne sont plus
   rafraîchies au fil de l'eau, mais une fois à la fin.
-- **Couverture partielle.** Les autres gestionnaires de cache de la cascade (≈ 380 ms) ne sont pas
-  encore regroupés.
+- **Couverture partielle.** Seuls les instantanés de villes et de diplomatie sont regroupés. Les
+  autres gestionnaires de cache, plus petits, ne le sont pas.
+- **Portée `message` : interface en retard d'une passe.** Les écouteurs Lua d'un événement émis
+  pendant la passe voient encore l'ancien instantané de la ville ou de la diplomatie, jusqu'à la fin
+  de la passe.

@@ -3,9 +3,10 @@
 //! L'originale est renommée GameCore_XP2_FinalRelease_orig.dll ; ce proxy prend son nom, relaie ses
 //! 157 exports (`forward`) et, au premier appel, la charge puis pose les détours de `coalesce`.
 //!
-//! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, ligne `mode=coalesce|count|off`
-//! (coalesce par défaut) et ligne `ameliorations=off|count|verify|fast|quiet` (off par défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du
-//! dossier Logs du jeu.
+//! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, lignes `mode=coalesce|count|off`
+//! (coalesce par défaut), `portee=cascade|message` (cascade par défaut),
+//! `ameliorations=off|count|verify|fast|quiet` et `rendements=off|count|verify|fast|quiet` (off par
+//! défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier Logs du jeu.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
 
@@ -13,6 +14,7 @@ mod coalesce;
 mod forward;
 mod improvements;
 mod patch;
+mod rendements;
 mod win;
 
 use std::ffi::c_void;
@@ -74,6 +76,12 @@ pub(crate) fn read_config() {
                 _ => coalesce::Mode::Coalesce,
             });
         }
+        if let Some(v) = line.trim().strip_prefix("portee=") {
+            coalesce::set_scope(match v.trim() {
+                "message" => coalesce::Scope::Message,
+                _ => coalesce::Scope::Cascade,
+            });
+        }
         if let Some(v) = line.trim().strip_prefix("ameliorations=") {
             improvements::set_mode(match v.trim() {
                 "count" => improvements::Mode::Count,
@@ -81,6 +89,15 @@ pub(crate) fn read_config() {
                 "fast" => improvements::Mode::Fast,
                 "quiet" => improvements::Mode::Quiet,
                 _ => improvements::Mode::Off,
+            });
+        }
+        if let Some(v) = line.trim().strip_prefix("rendements=") {
+            rendements::set_mode(match v.trim() {
+                "count" => rendements::Mode::Count,
+                "verify" => rendements::Mode::Verify,
+                "fast" => rendements::Mode::Fast,
+                "quiet" => rendements::Mode::Quiet,
+                _ => rendements::Mode::Off,
             });
         }
     }
@@ -99,6 +116,7 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, reserve
         win::DLL_PROCESS_DETACH if reserved.is_null() => {
             coalesce::on_proxy_unload();
             improvements::on_proxy_unload();
+            rendements::on_proxy_unload();
         }
         _ => {}
     }

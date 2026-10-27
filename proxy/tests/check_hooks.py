@@ -5,7 +5,7 @@ GameCore_XP2_FinalRelease.dll, l'originale sous GameCore_XP2_FinalRelease_orig.d
 
 L'originale refuse de s'initialiser hors du jeu (erreur 1114). On la projette donc d'abord avec
 DONT_RESOLVE_DLL_REFERENCES : le LoadLibraryW du proxy récupère alors ce module sans exécuter son
-DllMain. Aucune fonction du jeu n'est appelée ; on relit les octets écrits aux deux sites.
+DllMain. Aucune fonction du jeu n'est appelée ; on relit les octets écrits à chaque site.
 
 Usage (LOCALAPPDATA redirigé pour ne pas écrire dans le vrai journal) :
     python -I check_hooks.py <proxy compilé> <GameCore_XP2_FinalRelease.dll d'origine> <dossier temporaire>
@@ -25,7 +25,7 @@ original = os.path.join(game, "GameCore_XP2_FinalRelease_orig.dll")
 shutil.copyfile(proxy_src, proxy)
 shutil.copyfile(original_src, original)
 with open(os.path.join(game, "rollover_proxy.cfg"), "w") as f:
-    f.write("mode=count\nameliorations=verify\n")
+    f.write("mode=count\nportee=message\nameliorations=verify\nrendements=verify\n")
 os.environ["LOCALAPPDATA"] = tmp
 log_file = os.path.join(tmp, "Civ6RolloverProxy", "RolloverProxy.log")
 if os.path.exists(log_file):
@@ -55,7 +55,16 @@ print("journal :\n  " + open(log_file, encoding="utf-8").read().strip().replace(
 assert got == base, "le proxy n'a pas récupéré l'originale"
 assert status() & 0xB == 0xB, "les détours n'ont pas été posés"
 
-for name, rva in (("instantané", 0x72F80), ("DeclareWar", 0x2A1F90), ("amélioration", 0x260720)):
+SITES = (  # nom, RVA, prologue d'origine
+    ("instantané", 0x72F80, "48895c2410574883ec304863da8bf9"),
+    ("diplomatie", 0xB7630, "48895c2410564883ec204863da8bf1"),
+    ("DeclareWar", 0x2A1F90, "83faff0f840a020000488bc448894808"),
+    ("passe", 0x4AFC0, "48895c24185556574154415541564157"),
+    ("amélioration", 0x260720, "41564883ec304d8bf04d85c07509"),
+    ("rendement", 0x37EC60, "44894424185553574154415541564157"),
+    ("attente IA", 0x4A16E0, "40534883ec30488d05d34852"),
+)
+for name, rva, _ in SITES:
     patch = ctypes.string_at(base + rva, 14)
     assert patch[:6] == b"\xff\x25\x00\x00\x00\x00", f"{name} : pas de saut au site ({patch.hex()})"
     hook = struct.unpack("<Q", patch[6:])[0]
@@ -72,14 +81,12 @@ assert not missing, f"exports manquants : {sorted(missing)}"
 assert extra == {"DllMain", "RolloverProxyStatus", "RolloverProxyLoadOriginal"}, f"exports en trop : {sorted(extra)}"
 print(f"exports : les {len(exports(original))} de l'originale, plus {sorted(extra)}")
 
-# Déchargement du proxy (l'originale reste) : les octets d'origine doivent revenir aux trois sites.
+# Déchargement du proxy (l'originale reste) : les octets d'origine doivent revenir à chaque site.
 k32.FreeLibrary.argtypes = [wintypes.HMODULE]
 k32.GetModuleHandleW.restype = wintypes.HMODULE
 while k32.GetModuleHandleW(proxy):
     k32.FreeLibrary(lib._handle)
-for name, rva, prologue in (("instantané", 0x72F80, "48895c2410574883ec304863da8bf9"),
-                            ("DeclareWar", 0x2A1F90, "83faff0f840a020000488bc448894808"),
-                            ("amélioration", 0x260720, "41564883ec304d8bf04d85c07509")):
+for name, rva, prologue in SITES:
     now = ctypes.string_at(base + rva, len(prologue) // 2).hex()
     assert now == prologue, f"{name} : octets non restaurés après déchargement ({now})"
     print(f"{name} : octets d'origine restaurés après déchargement du proxy")

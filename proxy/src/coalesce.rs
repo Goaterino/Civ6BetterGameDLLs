@@ -1,19 +1,24 @@
-//! Regroupement des instantanés de villes pendant une cascade de déclarations de guerre.
+//! Regroupement des instantanés de l'interface : villes d'un joueur et diplomatie d'un joueur.
 //!
 //! Voir perf/rollover/cascade_guerre.md :
-//! - `1802a1f90` (DeclareWar) est récursive à travers le signal « guerre déclarée » ; on compte sa
-//!   profondeur ;
-//! - `180072f80(événement, joueur)` refait l'instantané de toutes les villes d'un joueur pour
-//!   l'interface. Il ne fait que lire l'état de jeu : pendant la cascade, on note les appels au lieu
-//!   de les exécuter, puis on rejoue chaque couple (événement, joueur) une seule fois, dans l'ordre
-//!   de première apparition, quand l'appel le plus externe de DeclareWar se termine.
+//! - `180072f80(événement, joueur)` refait l'instantané de toutes les villes d'un joueur ;
+//! - `1800b7630(événement, joueur)` refait l'instantané diplomatique d'un joueur envers tous les
+//!   autres, infobulles de `1801d02d0` comprises.
 //!
-//! L'état de cascade est un statique protégé par un verrou, rattaché au thread qui l'a ouverte :
+//! Les deux ne font que lire l'état de jeu et écrire dans des réserves de cache que seul le code
+//! `Cache_*` lit. Pendant une portée, on note les appels au lieu de les exécuter, puis on rejoue
+//! chaque triplet (instantané, événement, joueur) une seule fois, dans l'ordre de première
+//! apparition, à la fermeture de la portée la plus externe. Deux portées :
+//! - `1802a1f90` (DeclareWar), récursive à travers le signal « guerre déclarée » ;
+//! - avec `portee=message`, aussi `18004afc0` (Game_Processor), une passe de traitement d'un
+//!   message `GameUpdate`. Sa fermeture précède `18007bbe0`, qui expédie les caches à l'interface.
+//!
+//! L'état de portée est un statique protégé par un verrou, rattaché au thread qui l'a ouverte :
 //! pas de `thread_local!`, dont les destructeurs survivraient au déchargement du proxy.
 
 use crate::patch::{self, Site};
 use crate::{log, win};
-use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const SNAPSHOT: Site = Site {
@@ -21,6 +26,15 @@ const SNAPSHOT: Site = Site {
     address: 0x1_8007_2f80,
     // mov [rsp+10h],rbx / push rdi / sub rsp,30h / movsxd rbx,edx / mov edi,ecx
     expected: &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x63, 0xda, 0x8b, 0xf9],
+    copy: (0, 15),
+    resume: 15,
+};
+
+const DIPLO: Site = Site {
+    name: "instantané diplomatique d'un joueur",
+    address: 0x1_800b_7630,
+    // mov [rsp+10h],rbx / push rsi / sub rsp,20h / movsxd rbx,edx / mov esi,ecx
+    expected: &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x63, 0xda, 0x8b, 0xf1],
     copy: (0, 15),
     resume: 15,
 };
@@ -38,6 +52,15 @@ const DECLARE_WAR: Site = Site {
     resume: 25,
 };
 
+const STEP: Site = Site {
+    name: "passe de Game_Processor",
+    address: 0x1_8004_afc0,
+    // mov [rsp+18h],rbx / push rbp / push rsi / push rdi / push r12 / push r13 / push r14 / push r15
+    expected: &[0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57],
+    copy: (0, 16),
+    resume: 16,
+};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Mode {
@@ -49,11 +72,25 @@ pub enum Mode {
     Coalesce = 2,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Scope {
+    /// Seulement pendant une cascade de DeclareWar.
+    Cascade = 0,
+    /// Aussi pendant chaque passe de Game_Processor.
+    Message = 1,
+}
+
 static MODE: AtomicU8 = AtomicU8::new(Mode::Coalesce as u8);
+static SCOPE: AtomicU8 = AtomicU8::new(Scope::Cascade as u8);
 static TRAMP_SNAPSHOT: AtomicUsize = AtomicUsize::new(0);
+static TRAMP_DIPLO: AtomicUsize = AtomicUsize::new(0);
 static TRAMP_DECLARE: AtomicUsize = AtomicUsize::new(0);
+static TRAMP_STEP: AtomicUsize = AtomicUsize::new(0);
 /// Base de l'originale une fois les détours posés, pour les retirer au déchargement.
 static HOOKED_BASE: AtomicUsize = AtomicUsize::new(0);
+/// Le détour de la passe n'est posé qu'avec `portee=message`.
+static STEP_HOOKED: AtomicU8 = AtomicU8::new(0);
 
 fn mode() -> Mode {
     match MODE.load(Ordering::Relaxed) {
@@ -67,54 +104,109 @@ pub fn set_mode(m: Mode) {
     MODE.store(m as u8, Ordering::Relaxed);
 }
 
+fn scope() -> Scope {
+    if SCOPE.load(Ordering::Relaxed) == 1 { Scope::Message } else { Scope::Cascade }
+}
+
+pub fn set_scope(s: Scope) {
+    SCOPE.store(s as u8, Ordering::Relaxed);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+enum Kind {
+    City = 0,
+    Diplo = 1,
+}
+
 #[derive(Default)]
-struct Cascade {
+struct Pending {
     depth: u32,
     max_depth: u32,
     start: i64,
     declare_calls: u32,
-    snapshot_calls: u32,
-    /// Couples (événement, joueur) dans l'ordre de première apparition.
-    pending: Vec<(usize, usize)>,
+    calls: [u32; 2],
+    /// Triplets (instantané, événement, joueur) dans l'ordre de première apparition.
+    pending: Vec<(u8, usize, usize)>,
 }
 
-/// Thread qui a ouvert la cascade en cours (0 : aucune). Les autres threads passent sans s'arrêter.
-static OWNER: AtomicU32 = AtomicU32::new(0);
-static CASCADE: Mutex<Cascade> = Mutex::new(Cascade {
-    depth: 0,
-    max_depth: 0,
-    start: 0,
-    declare_calls: 0,
-    snapshot_calls: 0,
-    pending: Vec::new(),
-});
+impl Pending {
+    fn unique(&self, kind: Kind) -> u32 {
+        self.pending.iter().filter(|p| p.0 == kind as u8).count() as u32
+    }
+}
 
-fn cascade() -> std::sync::MutexGuard<'static, Cascade> {
-    CASCADE.lock().unwrap_or_else(|e| e.into_inner())
+/// Thread qui a ouvert la portée en cours (0 : aucune). Les autres threads passent sans s'arrêter.
+static OWNER: AtomicU32 = AtomicU32::new(0);
+static PENDING: Mutex<Pending> =
+    Mutex::new(Pending { depth: 0, max_depth: 0, start: 0, declare_calls: 0, calls: [0; 2], pending: Vec::new() });
+
+fn pending() -> std::sync::MutexGuard<'static, Pending> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 type SnapshotFn = unsafe extern "system" fn(usize, usize);
 type DeclareWarFn = unsafe extern "system" fn(usize, usize, usize, usize, usize, usize);
+type StepFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
-unsafe fn call_snapshot(event: usize, player: usize) {
-    let f: SnapshotFn = std::mem::transmute(TRAMP_SNAPSHOT.load(Ordering::Relaxed));
+unsafe fn call_snapshot(kind: u8, event: usize, player: usize) {
+    let tramp = if kind == Kind::City as u8 { &TRAMP_SNAPSHOT } else { &TRAMP_DIPLO };
+    let f: SnapshotFn = std::mem::transmute(tramp.load(Ordering::Relaxed));
     f(event, player)
 }
 
-unsafe extern "system" fn hook_snapshot(event: usize, player: usize) {
+unsafe fn request(kind: Kind, event: usize, player: usize) {
     let mut defer = false;
     if OWNER.load(Ordering::Relaxed) == win::GetCurrentThreadId() {
-        let mut c = cascade();
-        c.snapshot_calls += 1;
-        // Seuls les 32 bits bas comptent : la fonction lit ECX et EDX.
-        let key = (event & 0xffff_ffff, player & 0xffff_ffff);
-        if !c.pending.contains(&key) {
-            c.pending.push(key);
+        let mut p = pending();
+        p.calls[kind as usize] += 1;
+        // Seuls les 32 bits bas comptent : les deux fonctions lisent ECX et EDX.
+        let key = (kind as u8, event & 0xffff_ffff, player & 0xffff_ffff);
+        if !p.pending.contains(&key) {
+            p.pending.push(key);
         }
         defer = mode() == Mode::Coalesce;
     }
     if !defer {
-        call_snapshot(event, player);
+        call_snapshot(kind as u8, event, player);
+    }
+}
+
+unsafe extern "system" fn hook_snapshot(event: usize, player: usize) {
+    request(Kind::City, event, player)
+}
+
+unsafe extern "system" fn hook_diplo(event: usize, player: usize) {
+    request(Kind::Diplo, event, player)
+}
+
+/// Ouvre une portée sur ce thread, ou rend faux si une autre portée est ouverte ailleurs.
+unsafe fn enter(declare: bool) -> bool {
+    let tid = win::GetCurrentThreadId();
+    let owner = OWNER.load(Ordering::Relaxed);
+    if owner != 0 && owner != tid {
+        return false;
+    }
+    let mut p = pending();
+    if p.depth == 0 {
+        *p = Pending { start: win::qpc(), ..Pending::default() };
+        OWNER.store(tid, Ordering::Relaxed);
+    }
+    p.depth += 1;
+    p.max_depth = p.max_depth.max(p.depth);
+    p.declare_calls += declare as u32;
+    true
+}
+
+unsafe fn leave() {
+    let done = {
+        let mut p = pending();
+        p.depth -= 1;
+        (p.depth == 0).then(|| std::mem::take(&mut *p))
+    };
+    if let Some(p) = done {
+        OWNER.store(0, Ordering::Relaxed);
+        finish(p);
     }
 }
 
@@ -123,58 +215,94 @@ unsafe extern "system" fn hook_declare_war(this: usize, target: usize, reason: u
         return;
     }
     let f: DeclareWarFn = std::mem::transmute(TRAMP_DECLARE.load(Ordering::Relaxed));
-    let tid = win::GetCurrentThreadId();
-    let owner = OWNER.load(Ordering::Relaxed);
-    if owner != 0 && owner != tid {
-        // Cascade ouverte sur un autre thread : on ne s'en mêle pas.
+    if !enter(true) {
+        // Portée ouverte sur un autre thread : on ne s'en mêle pas.
         return f(this, target, reason, force, a5, a6);
     }
-    {
-        let mut c = cascade();
-        if c.depth == 0 {
-            *c = Cascade { start: win::qpc(), ..Cascade::default() };
-            OWNER.store(tid, Ordering::Relaxed);
-        }
-        c.depth += 1;
-        c.max_depth = c.max_depth.max(c.depth);
-        c.declare_calls += 1;
-    }
     f(this, target, reason, force, a5, a6);
-    let done = {
-        let mut c = cascade();
-        c.depth -= 1;
-        (c.depth == 0).then(|| std::mem::take(&mut *c))
-    };
-    if let Some(c) = done {
-        OWNER.store(0, Ordering::Relaxed);
-        finish(c);
+    leave();
+}
+
+unsafe extern "system" fn hook_step(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let f: StepFn = std::mem::transmute(TRAMP_STEP.load(Ordering::Relaxed));
+    if !enter(false) {
+        return f(a, b, c, d);
+    }
+    let r = f(a, b, c, d);
+    leave();
+    r
+}
+
+// Statistiques des passes, par rafale : une rafale se termine après une seconde sans passe, et elle
+// est journalisée à la fin de la passe suivante.
+static BURST: Mutex<[u64; 7]> = Mutex::new([0; 7]); // passes, villes (demandés, uniques), diplo (demandés, uniques), ticks de portée, ticks de rejeu
+static LAST: AtomicI64 = AtomicI64::new(0);
+
+fn flush_burst() {
+    let b = std::mem::take(&mut *BURST.lock().unwrap_or_else(|e| e.into_inner()));
+    if b[0] > 0 && (b[1] > 0 || b[3] > 0) {
+        log(&format!(
+            "passes mode={:?} portee={:?} passes={} villes_demandees={} villes_uniques={} diplo_demandees={} \
+             diplo_uniques={} portee_ms={:.1} rejeu_ms={:.1}",
+            mode(),
+            scope(),
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            win::qpc_ms(b[5] as i64),
+            win::qpc_ms(b[6] as i64),
+        ));
     }
 }
 
-unsafe fn finish(c: Cascade) {
-    let cascade_end = win::qpc();
+unsafe fn finish(p: Pending) {
+    let scope_end = win::qpc();
     if mode() == Mode::Coalesce {
-        for &(event, player) in &c.pending {
-            call_snapshot(event, player);
+        for &(kind, event, player) in &p.pending {
+            call_snapshot(kind, event, player);
         }
     }
     let flush_end = win::qpc();
-    // Une déclaration isolée (sans instantané) n'est pas journalisée : seules les cascades comptent.
-    if c.snapshot_calls > 0 || c.declare_calls > 1 {
-        let players: Vec<String> = c.pending.iter().map(|&(e, p)| format!("{}:{:#x}", p as i32, e)).collect();
+    if p.declare_calls > 1 || (p.declare_calls == 1 && p.calls[Kind::City as usize] + p.calls[Kind::Diplo as usize] > 0) {
+        // Une cascade de déclarations : une ligne à elle, comme avant.
+        let players: Vec<String> = p
+            .pending
+            .iter()
+            .map(|&(k, e, pl)| format!("{}{}:{:#x}", if k == Kind::City as u8 { "v" } else { "d" }, pl as i32, e))
+            .collect();
         log(&format!(
             "cascade mode={:?} declarewar={} profondeur_max={} instantanes_demandes={} uniques={} \
-             cascade_ms={:.1} rejeu_ms={:.1} joueurs=[{}]",
+             diplo_demandes={} diplo_uniques={} cascade_ms={:.1} rejeu_ms={:.1} joueurs=[{}]",
             mode(),
-            c.declare_calls,
-            c.max_depth,
-            c.snapshot_calls,
-            c.pending.len(),
-            win::qpc_ms(cascade_end - c.start),
-            win::qpc_ms(flush_end - cascade_end),
+            p.declare_calls,
+            p.max_depth,
+            p.calls[Kind::City as usize],
+            p.unique(Kind::City),
+            p.calls[Kind::Diplo as usize],
+            p.unique(Kind::Diplo),
+            win::qpc_ms(scope_end - p.start),
+            win::qpc_ms(flush_end - scope_end),
             players.join(" "),
         ));
+        return;
     }
+    if p.declare_calls > 0 {
+        return; // déclaration isolée, sans instantané
+    }
+    let last = LAST.swap(flush_end, Ordering::Relaxed);
+    if last != 0 && win::qpc_ms(p.start - last) > 1000.0 {
+        flush_burst();
+    }
+    let mut b = BURST.lock().unwrap_or_else(|e| e.into_inner());
+    b[0] += 1;
+    b[1] += p.calls[Kind::City as usize] as u64;
+    b[2] += p.unique(Kind::City) as u64;
+    b[3] += p.calls[Kind::Diplo as usize] as u64;
+    b[4] += p.unique(Kind::Diplo) as u64;
+    b[5] += (scope_end - p.start) as u64;
+    b[6] += (flush_end - scope_end) as u64;
 }
 
 /// Appelé quand l'originale vient d'être chargée, avant le premier appel relayé.
@@ -183,20 +311,28 @@ pub unsafe fn on_gamecore_loaded(base: usize) {
         log("originale chargée, mode Off : aucun détour");
         return;
     }
-    let sites = [SNAPSHOT, DECLARE_WAR];
+    let with_step = scope() == Scope::Message;
+    let sites = [SNAPSHOT, DIPLO, DECLARE_WAR, STEP];
     if let Err(e) = patch::check(base, &sites) {
         log(&format!("originale chargée en {base:#x}, version inattendue, aucun détour : {e}"));
         return;
     }
-    match patch::install(base, &SNAPSHOT, hook_snapshot as *const () as usize).and_then(|t| {
-        TRAMP_SNAPSHOT.store(t, Ordering::Relaxed);
-        patch::install(base, &DECLARE_WAR, hook_declare_war as *const () as usize)
-    }) {
-        Ok(t) => {
-            TRAMP_DECLARE.store(t, Ordering::Relaxed);
-            HOOKED_BASE.store(base, Ordering::Relaxed);
+    let r = (|| {
+        TRAMP_SNAPSHOT.store(patch::install(base, &SNAPSHOT, hook_snapshot as *const () as usize)?, Ordering::Relaxed);
+        TRAMP_DIPLO.store(patch::install(base, &DIPLO, hook_diplo as *const () as usize)?, Ordering::Relaxed);
+        TRAMP_DECLARE.store(patch::install(base, &DECLARE_WAR, hook_declare_war as *const () as usize)?, Ordering::Relaxed);
+        if with_step {
+            TRAMP_STEP.store(patch::install(base, &STEP, hook_step as *const () as usize)?, Ordering::Relaxed);
+            STEP_HOOKED.store(1, Ordering::Relaxed);
+        }
+        Ok::<(), String>(())
+    })();
+    // Même en cas d'échec partiel, on retient la base pour retirer au déchargement ce qui a été posé.
+    HOOKED_BASE.store(base, Ordering::Relaxed);
+    match r {
+        Ok(()) => {
             crate::STATUS.fetch_or(crate::ST_HOOKED, Ordering::Relaxed);
-            log(&format!("originale chargée en {base:#x}, détours posés, mode {:?}", mode()));
+            log(&format!("originale chargée en {base:#x}, détours posés, mode {:?}, portée {:?}", mode(), scope()));
         }
         Err(e) => log(&format!("échec de la pose des détours : {e}")),
     }
@@ -207,7 +343,13 @@ pub unsafe fn on_gamecore_loaded(base: usize) {
 pub unsafe fn on_proxy_unload() {
     let base = HOOKED_BASE.swap(0, Ordering::Relaxed);
     if base != 0 {
-        patch::restore(base, &DECLARE_WAR);
-        patch::restore(base, &SNAPSHOT);
+        if STEP_HOOKED.load(Ordering::Relaxed) != 0 {
+            patch::restore(base, &STEP);
+        }
+        for (site, tramp) in [(&DECLARE_WAR, &TRAMP_DECLARE), (&DIPLO, &TRAMP_DIPLO), (&SNAPSHOT, &TRAMP_SNAPSHOT)] {
+            if tramp.load(Ordering::Relaxed) != 0 {
+                patch::restore(base, site);
+            }
+        }
     }
 }
