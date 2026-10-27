@@ -26,6 +26,8 @@ import etl as etl_reader  # noqa: E402
 REPO = pathlib.Path(__file__).resolve().parents[2]
 FUNCTIONS_TSV = REPO / "docs" / "gamecore_xp2" / "functions.tsv"
 GAMECORE = "gamecore_xp2_finalrelease.dll"
+GAMECORE_ORIG = "gamecore_xp2_finalrelease_orig.dll"
+PROXY = "proxy rollover"
 GAMECORE_BASE = 0x180000000  # base Ghidra des adresses de functions.tsv
 LOCAL_PLAYER = 0
 
@@ -171,6 +173,10 @@ def trace_report(etl, lines, window):
         return
     pid = civ[0][0]
     mods = sorted({(b, s, n) for p, b, s, n in tr.images if p == pid})
+    # Avec le proxy installé, l'originale est chargée sous le nom _orig et le proxy prend le sien.
+    if any(n == GAMECORE_ORIG for _, _, n in mods):
+        rename = {GAMECORE: PROXY, GAMECORE_ORIG: GAMECORE}
+        mods = [(b, s, rename.get(n, n)) for b, s, n in mods]
     mod_starts = [m[0] for m in mods]
 
     def module(ip):

@@ -57,3 +57,41 @@ l'interface, et leur remise à jour recalcule les rendements de toutes les ville
 remises à jour étaient différées et regroupées, une seule par ville à la fin, la majeure partie des
 2,7 s disparaîtrait. Il faudra le confirmer par décompilation : que fait `1802a7100`, et est-ce que
 les caches `Cache_*` comptent dans l'état synchronisé ou servent seulement à l'affichage ?
+
+## Après le regroupement : tour 78 → 79 en mode coalesce (capture du 2026-10-27, 16:21)
+
+Même sauvegarde, proxy en mode `coalesce`. Le passage dure 6 s au lieu de 9 s. `analyze.py`
+reconnaît maintenant l'original chargé sous le nom `_orig`.
+
+**Le thread GameCore** passe de 6,2 s à 4,0 s dans l'arbre du passage de tour :
+
+| chaîne | avant | après |
+|---|---:|---:|
+| cascade diplomatique (`Diplomatic` → … → `1802a1f90`) | 2,97 s | 0,77 s |
+| `GlobalAi` → `CityBuild` → `Value_Manager` → `Improvement_Yields` | 1,0 s | 0,9 s |
+| `Player_Units` (combat, files de production, gouverneurs, routes commerciales) | 0,8 s | 0,9 s |
+| `Game::Processor::BeginTurn` | 0,5 s | 0,7 s |
+
+**Prochaine cible : `180260720` (`Improvement_Yields.cpp`).** Elle consomme encore **1,1 s de temps
+propre**, soit plus d'un quart du thread. On l'atteint par deux chemins : l'évaluation des
+constructions par l'IA (`CityBuild`, 0,37 s) et le calcul des rendements de quartier
+(`District_Instance` → `18025f570`, 0,83 s).
+
+Décompilée, elle répond à la question « ce joueur peut-il construire cette amélioration ? » :
+1. elle vérifie les prérequis de technologie et de dogme de l'amélioration ;
+2. elle parcourt une liste de la base de règles (`base + 0xe40`, des entrées
+   (nom d'amélioration en `+0x20`, trait en `+0x28`)) et compare **par `strcmp`** le nom de
+   l'amélioration à celui de chaque entrée. Les 62 noms commencent tous par `IMPROVEMENT_`, donc
+   chaque comparaison parcourt au moins 12 caractères ;
+3. pour chaque entrée trouvée, elle cherche le trait dans les traits de la civilisation et du
+   dirigeant du joueur, par deux recherches linéaires. `1802209a0`, qui retrouve la civilisation et le
+   dirigeant, pèse encore 0,2 s de temps propre.
+
+L'étape 2 ne dépend que de l'amélioration, et la base de règles ne change pas pendant la partie. On
+peut donc la précalculer une fois : une table de l'amélioration vers ses traits remplace les
+`strcmp`. La fonction reste une lecture pure. Remplacée par un détour qui rend le même booléen,
+elle ne change pas l'état de jeu.
+
+**Ce qui reste hors GameCore.** Un thread de l'exe tourne à 72 % (5 s), et une dizaine de threads de
+travail à environ 35 % chacun. La sauvegarde automatique bloque toujours le thread principal environ
+500 ms par tour.

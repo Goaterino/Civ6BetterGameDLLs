@@ -1,0 +1,19 @@
+[package]
+name = "rollover-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Proxy de GameCore_XP2_FinalRelease.dll pour Civ6 : regroupe les instantanés de villes pendant une cascade de guerre"
+
+# Paquet autonome, hors de l'espace de travail du solveur : il ne vise que Windows x64.
+[workspace]
+
+[lib]
+name = "GameCore_XP2_FinalRelease"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+# Pas de déroulement de pile à travers le code du jeu.
+panic = "abort"

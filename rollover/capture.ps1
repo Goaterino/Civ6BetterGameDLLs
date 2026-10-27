@@ -1,4 +1,4 @@
-# Capture WPR (profil CPU échantillonné, avec piles) d'un passage de tour de Civ6.
+﻿# Capture WPR (profil CPU échantillonné, avec piles) d'un passage de tour de Civ6.
 # À lancer dans un PowerShell administrateur, jeu ouvert, juste avant de finir le tour :
 #   powershell -ExecutionPolicy Bypass -File perf\rollover\capture.ps1 -Name tour79
 # Puis analyser (sans droits admin) :
