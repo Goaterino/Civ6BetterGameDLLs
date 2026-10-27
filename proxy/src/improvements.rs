@@ -14,7 +14,8 @@
 //! Réglage `ameliorations=off|count|verify|fast` dans rollover_proxy.cfg :
 //! - `count` : détour posé, originale appelée, on compte et on chronomètre ;
 //! - `verify` : on calcule les deux versions, on rend celle de l'originale et on compte les écarts ;
-//! - `fast` : version précalculée seule.
+//! - `fast` : version précalculée seule, comptée et chronométrée ;
+//! - `quiet` : version précalculée seule, sans compteur ni chronomètre ni journal (pour jouer).
 
 use crate::patch::{self, Site, IMAGE_BASE};
 use crate::{log, win};
@@ -52,6 +53,7 @@ pub enum Mode {
     Count = 1,
     Verify = 2,
     Fast = 3,
+    Quiet = 4,
 }
 
 static MODE: AtomicU8 = AtomicU8::new(Mode::Off as u8);
@@ -64,6 +66,7 @@ fn mode() -> Mode {
         1 => Mode::Count,
         2 => Mode::Verify,
         3 => Mode::Fast,
+        4 => Mode::Quiet,
         _ => Mode::Off,
     }
 }
@@ -228,12 +231,16 @@ unsafe extern "system" fn hook(a1: usize, player: usize, imp: usize) -> u8 {
     if imp == 0 {
         return 0;
     }
+    let m = mode();
+    if m == Mode::Quiet {
+        return fast(player as u32, imp);
+    }
     let t0 = win::qpc();
     let last = LAST.swap(t0, Ordering::Relaxed);
     if last != 0 && win::qpc_ms(t0 - last) > 1000.0 {
         flush();
     }
-    let r = match mode() {
+    let r = match m {
         Mode::Fast => fast(player as u32, imp),
         Mode::Verify => {
             let o = original(a1, player, imp);

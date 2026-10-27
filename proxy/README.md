@@ -177,9 +177,10 @@ appelant les mêmes fonctions de l'original, dans le même ordre, mais remplace 
 table « amélioration → traits » remplie au premier appel. La table est refaite si la liste change
 d'adresse ou de taille.
 
-Réglage : une ligne `ameliorations=off|count|verify|fast` dans `rollover_proxy.cfg`
+Réglage : une ligne `ameliorations=off|count|verify|fast|quiet` dans `rollover_proxy.cfg`
 (`install.ps1 -Ameliorations …`). Le mode `verify` calcule les deux versions, rend celle de
-l'original et compte les écarts. Journal : une ligne `ameliorations …` par rafale d'appels, écrite au
+l'original et compte les écarts. `quiet` fait comme `fast`, mais sans compteur, sans chronomètre ni
+journal : c'est le mode pour jouer. Journal : une ligne `ameliorations …` par rafale d'appels, écrite au
 premier appel qui suit une seconde de pause.
 
 Mesures sur `AutoSave_0078` → tour 80, avec `mode=coalesce`. Les durées additionnent tous les

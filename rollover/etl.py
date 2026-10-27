@@ -2,7 +2,8 @@
 
 Plus rapide et plus léger que tracerpt -> XML (une capture CPU + E/S de 1 minute fait plusieurs Go).
 On ne décode que les événements noyau utiles, par leur disposition binaire x64 connue :
-images chargées, threads (et leurs noms), échantillons CPU et piles.
+images chargées, threads (et leurs noms), échantillons CPU et piles, et, pour les seuls threads de
+Civilization VI, les changements de contexte (CSwitch) et réveils (ReadyThread) avec leurs piles.
 
 Les horodatages sont bruts (compteur QPC) pour pouvoir apparier une pile à son échantillon.
 """
@@ -95,7 +96,11 @@ class Trace:
         self.thread_pid = {}    # tid -> pid
         self.thread_name = {}   # tid -> nom
         self.samples = []       # (qpc, tid, ip)
-        self.stacks = {}        # (qpc, tid) -> [adresses], piles des échantillons
+        self.stacks = {}        # (qpc, tid) -> [adresses], piles des échantillons et des événements ci-dessous
+        # Threads de Civilization VI seulement :
+        # (qpc, tid entrant, tid sortant, raison d'attente du sortant, état du sortant, attente de l'entrant)
+        self.cswitches = []
+        self.readies = []       # (qpc, tid qui réveille ou None sans pile, tid réveillé)
         self.interval_100ns = None
         self.perf_freq = self.start_filetime = None
         self.first_qpc = None
@@ -106,6 +111,17 @@ def read(path, max_buffers=None):
     tr = Trace()
     sample_keys = set()
     pending_stacks = {}  # piles arrivées avant leur échantillon (rare, selon l'ordre des tampons)
+    civ_pids = set()
+    ready_at = {}  # horodatage d'un ReadyThread -> son indice, en attendant sa pile
+
+    def civ(t):
+        return tr.thread_pid.get(t) in civ_pids
+
+    def want_stack(key):
+        if key in pending_stacks:
+            tr.stacks[key] = pending_stacks.pop(key)
+        else:
+            sample_keys.add(key)
 
     def on_event(rec):
         tr.events += 1
@@ -121,11 +137,7 @@ def read(path, max_buffers=None):
             if opcode == 46 and len(data) >= 12:  # SampledProfile
                 ip, stid = struct.unpack_from("<QI", data)
                 tr.samples.append((ts, stid, ip))
-                key = (ts, stid)
-                if key in pending_stacks:
-                    tr.stacks[key] = pending_stacks.pop(key)
-                else:
-                    sample_keys.add(key)
+                want_stack((ts, stid))
             elif opcode in (73, 74) and len(data) >= 8:  # intervalle d'échantillonnage
                 source, interval = struct.unpack_from("<II", data)
                 if source == 0:
@@ -134,6 +146,14 @@ def read(path, max_buffers=None):
             qpc, spid, stid = struct.unpack_from("<QII", data)
             frames = list(struct.unpack_from(f"<{(len(data) - 16) // 8}Q", data, 16))
             key = (qpc, stid)
+            # Une pile peut arriver en deux événements de même clé : partie noyau puis partie utilisateur.
+            if key in tr.stacks:
+                tr.stacks[key] = tr.stacks[key] + frames
+                return
+            i = ready_at.pop(qpc, None)
+            if i is not None:
+                tr.readies[i] = (qpc, stid, tr.readies[i][2])
+                tr.stacks[key] = frames
             if key in sample_keys:
                 sample_keys.discard(key)
                 tr.stacks[key] = frames
@@ -143,8 +163,23 @@ def read(path, max_buffers=None):
             base, size_, ipid = struct.unpack_from("<QQI", data)
             name = data[56:].decode("utf-16-le", "replace").split("\0", 1)[0]
             tr.images.append((ipid, base, size_, name.rsplit("\\", 1)[-1].lower()))
+            if tr.images[-1][3].startswith("civilizationvi"):
+                civ_pids.add(ipid)
         elif provider == THREAD:
-            if opcode in (1, 2, 3, 4) and len(data) >= 8:
+            if opcode == 36 and len(data) >= 24:  # CSwitch ; la pile est celle du thread entrant
+                new, old, _, _, _, _, reason, _, state, _, wait = struct.unpack_from("<IIbbBbbbbbI", data)
+                if civ(new) or civ(old):
+                    tr.cswitches.append((ts, new, old, reason, state, wait))
+                    if civ(new):
+                        want_stack((ts, new))
+            elif opcode == 50 and len(data) >= 4:  # ReadyThread
+                # L'en-tête ne dit pas qui réveille : on le reprend de la pile, celle du thread qui
+                # réveille, appariée par horodatage.
+                target, = struct.unpack_from("<I", data)
+                if civ(target):
+                    ready_at[ts] = len(tr.readies)
+                    tr.readies.append((ts, None, target))
+            elif opcode in (1, 2, 3, 4) and len(data) >= 8:
                 tpid, ttid = struct.unpack_from("<II", data)
                 tr.thread_pid[ttid] = tpid
             elif opcode == 72 and len(data) >= 8:  # SetName

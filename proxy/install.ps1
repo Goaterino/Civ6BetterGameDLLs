@@ -9,7 +9,7 @@ param(
     [ValidateSet("coalesce", "count", "off")]
     [string]$Mode = "coalesce",
     # Détour de 180260720 (amélioration constructible) : voir src/improvements.rs.
-    [ValidateSet("off", "count", "verify", "fast")]
+    [ValidateSet("off", "count", "verify", "fast", "quiet")]
     [string]$Ameliorations = "off",
     [switch]$Uninstall,
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI"

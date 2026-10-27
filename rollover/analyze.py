@@ -125,7 +125,9 @@ def load_trace(etl):
     cache = etl.with_suffix(".pkl")
     if cache.exists() and cache.stat().st_mtime >= etl.stat().st_mtime:
         with cache.open("rb") as f:
-            return pickle.load(f)
+            tr = pickle.load(f)
+        if hasattr(tr, "cswitches"):  # cache antérieur au décodage des changements de contexte : on relit
+            return tr
     tr = etl_reader.read(etl)
     with cache.open("wb") as f:
         pickle.dump(tr, f, protocol=pickle.HIGHEST_PROTOCOL)

@@ -4,7 +4,7 @@
 //! 157 exports (`forward`) et, au premier appel, la charge puis pose les détours de `coalesce`.
 //!
 //! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, ligne `mode=coalesce|count|off`
-//! (coalesce par défaut) et ligne `ameliorations=off|count|verify|fast` (off par défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du
+//! (coalesce par défaut) et ligne `ameliorations=off|count|verify|fast|quiet` (off par défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du
 //! dossier Logs du jeu.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
@@ -79,6 +79,7 @@ pub(crate) fn read_config() {
                 "count" => improvements::Mode::Count,
                 "verify" => improvements::Mode::Verify,
                 "fast" => improvements::Mode::Fast,
+                "quiet" => improvements::Mode::Quiet,
                 _ => improvements::Mode::Off,
             });
         }

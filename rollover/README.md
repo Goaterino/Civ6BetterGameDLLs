@@ -95,3 +95,44 @@ elle ne change pas l'état de jeu.
 **Ce qui reste hors GameCore.** Un thread de l'exe tourne à 72 % (5 s), et une dizaine de threads de
 travail à environ 35 % chacun. La sauvegarde automatique bloque toujours le thread principal environ
 500 ms par tour.
+
+## Les attentes du thread GameCore (même capture, changements de contexte)
+
+`etl.py` décode maintenant les changements de contexte (CSwitch) et les réveils (ReadyThread) des
+threads du jeu, avec leurs piles. Une pile arrive en deux événements : partie noyau, puis partie
+utilisateur. `waits.py` les exploite.
+
+**Ce qu'on voit.** Pendant le passage de tour (16:21:34,4 → 16:21:41,25), le thread GameCore
+travaille 4,8 s et passe **2,06 s hors CPU** :
+- **1,99 s en attente volontaire** (`Waiting / UserRequest`), en 61 fois, dont 26 de plus de 20 ms et
+  une de 375 ms ;
+- **il attend dans sa propre boucle** (`exe+0x999dbe`, appelé directement par le point d'entrée du
+  thread) : il n'a plus de travail ;
+- **c'est presque toujours le thread principal 8724 qui le réveille** (1,96 s sur 2,06), depuis sa
+  boucle principale (`exe+0x6ff769` → `0x76c3a` → `0x77d65` → `0x999ce6`), pour lui confier le
+  message suivant (`Messages_GameUpdate`).
+
+Le passage de tour fonctionne donc **à l'alternance** : GameCore traite un message, puis attend que
+le thread principal ait fini son tour de boucle (traitement des événements de jeu, interface Lua,
+rendu) avant de recevoir le suivant.
+
+**Ce que fait le thread principal pendant ces attentes** (1,94 s, occupé à 76 %), par branche de sa
+boucle principale :
+
+| branche (sous `exe+0x6ff769`) | temps | contenu |
+|---|---:|---|
+| `0x76c3a` → `0x7795f` (`0x80880`, `0x8073e`, `0x8066e`…) | ~620 ms | code de l'exe, plus GameCore (93 ms) et Localization : probablement le traitement des événements de jeu pour la vue |
+| `0x76bf0` → `0x6e917` | ~300 ms | Lua (`havokscript`) et GameCore : scripts d'interface |
+| `0x76c3a` → `0x77c5b` → `0x94e62f` | ~150 ms | rendu (pilote graphique) |
+| `0x77cbc`, `0x77be7` | ~150 ms | appels système, attentes |
+| Steam (`steam_api64`) | ~70 ms (+ 139 ms en feuille) | rappels Steam |
+
+**Conséquences pour la suite :**
+- Sur ce passage de tour, environ 30 % du temps réel ne se joue pas dans GameCore, mais dans le thread
+  principal de l'exe. Accélérer GameCore ne réduit pas ces attentes.
+- Pour les réduire, il faudrait alléger le travail du thread principal entre deux messages :
+  - **réglages du jeu** : mouvements et combats rapides, moins d'animations ;
+  - **mods d'interface** et leurs écouteurs Lua ;
+  - ou **détourner des fonctions de l'exe**, ce que le proxy peut faire aussi : il est dans le même
+    processus. Mais l'exe n'a pas de symboles, et il faudrait d'abord nommer `0x7795f` et ses
+    branches.
