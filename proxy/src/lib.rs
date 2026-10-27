@@ -4,13 +4,14 @@
 //! 157 exports (`forward`) et, au premier appel, la charge puis pose les détours de `coalesce`.
 //!
 //! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, ligne `mode=coalesce|count|off`
-//! (coalesce par défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du
+//! (coalesce par défaut) et ligne `ameliorations=off|count|verify|fast` (off par défaut). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du
 //! dossier Logs du jeu.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
 
 mod coalesce;
 mod forward;
+mod improvements;
 mod patch;
 mod win;
 
@@ -73,6 +74,14 @@ pub(crate) fn read_config() {
                 _ => coalesce::Mode::Coalesce,
             });
         }
+        if let Some(v) = line.trim().strip_prefix("ameliorations=") {
+            improvements::set_mode(match v.trim() {
+                "count" => improvements::Mode::Count,
+                "verify" => improvements::Mode::Verify,
+                "fast" => improvements::Mode::Fast,
+                _ => improvements::Mode::Off,
+            });
+        }
     }
 }
 
@@ -86,7 +95,10 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, reserve
         }
         // Déchargement par FreeLibrary (reserved nul), pas fin du processus : l'originale reste
         // chargée, on y remet les octets d'origine pour qu'aucun saut ne vise ce proxy déchargé.
-        win::DLL_PROCESS_DETACH if reserved.is_null() => coalesce::on_proxy_unload(),
+        win::DLL_PROCESS_DETACH if reserved.is_null() => {
+            coalesce::on_proxy_unload();
+            improvements::on_proxy_unload();
+        }
         _ => {}
     }
     1

@@ -33,6 +33,7 @@ pub(crate) fn real_module() -> usize {
         }
         crate::STATUS.fetch_or(crate::ST_ORIGINAL, Ordering::Relaxed);
         coalesce::on_gamecore_loaded(h);
+        crate::improvements::on_gamecore_loaded(h);
         h
     })
 }

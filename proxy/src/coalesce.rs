@@ -22,6 +22,7 @@ const SNAPSHOT: Site = Site {
     // mov [rsp+10h],rbx / push rdi / sub rsp,30h / movsxd rbx,edx / mov edi,ecx
     expected: &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x63, 0xda, 0x8b, 0xf9],
     copy: (0, 15),
+    resume: 15,
 };
 
 const DECLARE_WAR: Site = Site {
@@ -34,6 +35,7 @@ const DECLARE_WAR: Site = Site {
         0x53, 0x55, 0x57, 0x41, 0x54, 0x48, 0x83, 0xec, 0x68,
     ],
     copy: (9, 25),
+    resume: 25,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

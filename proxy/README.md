@@ -168,6 +168,39 @@ l'état d'après la cascade. Aucune désynchronisation, et le salon a accepté l
 **Le proxy n'a pas besoin d'être installé chez tout le monde.** Mais chaque client calcule le
 passage de tour de son côté, donc seuls ceux qui ont le proxy gagnent du temps.
 
+## Deuxième détour : `180260720`, amélioration constructible
+
+[src/improvements.rs](src/improvements.rs). La fonction répond à « ce joueur peut-il construire
+cette amélioration ? ». Pour retrouver les traits qui interdisent une amélioration, elle parcourt une
+liste de la base de règles et compare chaque nom par `strcmp`. Le détour refait le même calcul en
+appelant les mêmes fonctions de l'original, dans le même ordre, mais remplace ce parcours par une
+table « amélioration → traits » remplie au premier appel. La table est refaite si la liste change
+d'adresse ou de taille.
+
+Réglage : une ligne `ameliorations=off|count|verify|fast` dans `rollover_proxy.cfg`
+(`install.ps1 -Ameliorations …`). Le mode `verify` calcule les deux versions, rend celle de
+l'original et compte les écarts. Journal : une ligne `ameliorations …` par rafale d'appels, écrite au
+premier appel qui suit une seconde de pause.
+
+Mesures sur `AutoSave_0078` → tour 80, avec `mode=coalesce`. Les durées additionnent tous les
+threads :
+
+| mode | appels | durée cumulée | par appel | écarts | passages 79 / 80 |
+|---|---:|---:|---:|---:|---|
+| `verify` | 4,45 M + 4,44 M + 4,27 M | 13,2 s | 0,99 µs | **0** | 6 s / 6 s |
+| `count` | 13 166 324 | 11 009 ms | 0,84 µs | – | 6 s / 6 s |
+| `fast` | 13 166 078 | **4 380 ms** | 0,33 µs | – | **5 s / 4 s** |
+
+- **Le gain :** 6,6 s de CPU économisées en trois passages de tour, soit environ 2,2 s par passage,
+  tous threads confondus. Les passages de tour, mesurés à la seconde près, gagnent 1 à 2 s.
+- **Ce qui reste dans les 0,33 µs :** les sous-appels, en particulier `1802209a0`, qui retrouve la
+  civilisation et le dirigeant par une recherche linéaire, ainsi que le verrou de la table et les
+  deux lectures du compteur de performance.
+- **Le volume d'appels :** environ 4,4 millions par passage de tour. Les appelants (rendements de
+  quartier, évaluation de l'IA) posent sans cesse la même question. Ce serait la cible suivante,
+  mais une mémorisation par (joueur, amélioration) devrait être invalidée chaque fois qu'une
+  technologie ou un dogme change.
+
 ## Limites du prototype
 
 - **Un seul build du jeu.** Les adresses sont celles de GameCore_XP2 FinalRelease

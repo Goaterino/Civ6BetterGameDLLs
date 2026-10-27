@@ -25,7 +25,7 @@ original = os.path.join(game, "GameCore_XP2_FinalRelease_orig.dll")
 shutil.copyfile(proxy_src, proxy)
 shutil.copyfile(original_src, original)
 with open(os.path.join(game, "rollover_proxy.cfg"), "w") as f:
-    f.write("mode=count\n")
+    f.write("mode=count\nameliorations=verify\n")
 os.environ["LOCALAPPDATA"] = tmp
 log_file = os.path.join(tmp, "Civ6RolloverProxy", "RolloverProxy.log")
 if os.path.exists(log_file):
@@ -55,7 +55,7 @@ print("journal :\n  " + open(log_file, encoding="utf-8").read().strip().replace(
 assert got == base, "le proxy n'a pas récupéré l'originale"
 assert status() & 0xB == 0xB, "les détours n'ont pas été posés"
 
-for name, rva in (("instantané", 0x72F80), ("DeclareWar", 0x2A1F90)):
+for name, rva in (("instantané", 0x72F80), ("DeclareWar", 0x2A1F90), ("amélioration", 0x260720)):
     patch = ctypes.string_at(base + rva, 14)
     assert patch[:6] == b"\xff\x25\x00\x00\x00\x00", f"{name} : pas de saut au site ({patch.hex()})"
     hook = struct.unpack("<Q", patch[6:])[0]
@@ -72,13 +72,14 @@ assert not missing, f"exports manquants : {sorted(missing)}"
 assert extra == {"DllMain", "RolloverProxyStatus", "RolloverProxyLoadOriginal"}, f"exports en trop : {sorted(extra)}"
 print(f"exports : les {len(exports(original))} de l'originale, plus {sorted(extra)}")
 
-# Déchargement du proxy (l'originale reste) : les octets d'origine doivent revenir aux deux sites.
+# Déchargement du proxy (l'originale reste) : les octets d'origine doivent revenir aux trois sites.
 k32.FreeLibrary.argtypes = [wintypes.HMODULE]
 k32.GetModuleHandleW.restype = wintypes.HMODULE
 while k32.GetModuleHandleW(proxy):
     k32.FreeLibrary(lib._handle)
 for name, rva, prologue in (("instantané", 0x72F80, "48895c2410574883ec304863da8bf9"),
-                            ("DeclareWar", 0x2A1F90, "83faff0f840a020000488bc448894808")):
+                            ("DeclareWar", 0x2A1F90, "83faff0f840a020000488bc448894808"),
+                            ("amélioration", 0x260720, "41564883ec304d8bf04d85c07509")):
     now = ctypes.string_at(base + rva, len(prologue) // 2).hex()
     assert now == prologue, f"{name} : octets non restaurés après déchargement ({now})"
     print(f"{name} : octets d'origine restaurés après déchargement du proxy")

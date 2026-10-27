@@ -1,5 +1,6 @@
 ﻿# Installe (ou retire avec -Uninstall) le proxy de GameCore_XP2_FinalRelease.dll.
 #   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Mode count
+#   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Ameliorations verify
 #   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Uninstall
 # L'original est renommé GameCore_XP2_FinalRelease_orig.dll, jamais supprimé ; le proxy prend son
 # nom. -Uninstall remet l'original en place. Une vérification des fichiers par Steam ou une mise à
@@ -7,6 +8,9 @@
 param(
     [ValidateSet("coalesce", "count", "off")]
     [string]$Mode = "coalesce",
+    # Détour de 180260720 (amélioration constructible) : voir src/improvements.rs.
+    [ValidateSet("off", "count", "verify", "fast")]
+    [string]$Ameliorations = "off",
     [switch]$Uninstall,
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI"
 )
@@ -52,6 +56,6 @@ if (-not (Test-Ours $dll)) {
     Rename-Item $dll (Split-Path $orig -Leaf)
 }
 Copy-Item $built $dll -Force
-Set-Content -Encoding ascii $cfg "mode=$Mode"
-Write-Host "Proxy installé dans $bin (mode $Mode) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
+Set-Content -Encoding ascii $cfg "mode=$Mode", "ameliorations=$Ameliorations"
+Write-Host "Proxy installé dans $bin (mode $Mode, ameliorations $Ameliorations) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
 Write-Host "Journal : $env:LOCALAPPDATA\Civ6RolloverProxy\RolloverProxy.log"

@@ -14,6 +14,9 @@ pub struct Site {
     pub expected: &'static [u8],
     /// Instructions recopiées dans le trampoline : [début, fin) en décalage depuis le site.
     pub copy: (usize, usize),
+    /// Décalage où le trampoline reprend dans l'originale : en général `copy.1`, plus loin quand
+    /// le détour refait lui-même un test et son saut relatif, qui ne se recopient pas.
+    pub resume: usize,
 }
 
 pub const IMAGE_BASE: u64 = 0x1_8000_0000;
@@ -34,7 +37,7 @@ pub unsafe fn check(base: usize, sites: &[Site]) -> Result<(), String> {
         if have != s.expected {
             return Err(format!("{} : octets inattendus en {:#x} ({:02x?})", s.name, s.address, have));
         }
-        assert!(s.expected.len() >= JMP_LEN && s.copy.1 <= s.expected.len());
+        assert!(s.expected.len() >= JMP_LEN && s.copy.1 <= s.expected.len() && s.resume >= s.copy.1);
     }
     Ok(())
 }
@@ -64,7 +67,7 @@ pub unsafe fn install(base: usize, site: &Site, hook: usize) -> Result<usize, St
         return Err(format!("{} : VirtualAlloc a échoué", site.name));
     }
     std::ptr::copy_nonoverlapping(copied.as_ptr(), tramp, copied.len());
-    let resume = (at + site.copy.1) as u64;
+    let resume = (at + site.resume) as u64;
     std::ptr::copy_nonoverlapping(jmp_abs(resume).as_ptr(), tramp.add(copied.len()), JMP_LEN);
 
     let mut old = 0u32;
