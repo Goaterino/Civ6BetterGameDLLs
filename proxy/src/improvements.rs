@@ -7,9 +7,13 @@
 //! réponse est non si la civilisation ou le dirigeant du joueur a ce trait.
 //!
 //! Le parcours par `strcmp` ne dépend que de l'amélioration : on le précalcule une fois par
-//! amélioration (table amélioration → traits, dans l'ordre de la liste). Tout le reste est refait à
-//! l'identique, avec les mêmes fonctions de l'originale, dans le même ordre. La fonction ne fait que
-//! lire l'état de jeu.
+//! amélioration (table amélioration → traits, dans l'ordre de la liste). La civilisation et le
+//! dirigeant du joueur, que l'originale recherche à chaque trait trouvé, sont mémorisés par joueur.
+//! Les prérequis sont refaits à l'identique, avec les mêmes fonctions de l'originale. La fonction ne
+//! fait que lire l'état de jeu.
+//!
+//! Les mémoires sont lues sans verrou ni compteur de références : la fonction est appelée des
+//! millions de fois par passage de tour, depuis une douzaine de threads.
 //!
 //! Réglage `ameliorations=off|count|verify|fast` dans rollover_proxy.cfg :
 //! - `count` : détour posé, originale appelée, on compte et on chronomètre ;
@@ -19,9 +23,8 @@
 
 use crate::patch::{self, Site, IMAGE_BASE};
 use crate::{log, win};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 const CAN_BUILD: Site = Site {
     name: "amélioration constructible",
@@ -91,15 +94,73 @@ macro_rules! call {
     }};
 }
 
-/// Traits de chaque amélioration, dans l'ordre de la liste. La table est refaite si la liste change
-/// d'adresse ou de taille (nouvelle partie) ; chaque entrée garde le pointeur du nom de
-/// l'amélioration, revérifié à chaque appel.
-struct Table {
-    list: (usize, usize),
-    by_improvement: HashMap<usize, (usize, Arc<[usize]>)>,
+/// Une amélioration et ses traits, dans l'ordre de la liste. Jamais libérée : une entrée publiée peut
+/// être lue sans verrou par tous les threads.
+struct Entry {
+    improvement: usize,
+    /// Pointeur du nom de l'amélioration au moment du calcul, revérifié à chaque appel.
+    name: usize,
+    traits: Box<[usize]>,
 }
 
-static TABLE: RwLock<Option<Table>> = RwLock::new(None);
+/// Lignes de civilisation et de dirigeant d'un joueur, valables pour sa configuration `pc`.
+struct PlayerRows {
+    pc: usize,
+    civ: usize,
+    leader: usize,
+}
+
+const SLOTS: usize = 1024; // puissance de 2, bien plus que les ~110 améliorations vues en partie
+const MAX_ENTRIES: usize = SLOTS / 2;
+const PLAYERS: usize = 64;
+
+/// Mémoires d'une partie, lues sans verrou. On en crée une nouvelle quand la liste des entrées
+/// (nom, trait) change d'adresse ou de taille, ou à chaque nouvelle partie ; l'ancienne est
+/// abandonnée sans être libérée, puisqu'un autre thread peut encore la lire.
+struct Memo {
+    list: (usize, usize),
+    slots: [AtomicPtr<Entry>; SLOTS],
+    entries: AtomicUsize,
+    players: [AtomicPtr<PlayerRows>; PLAYERS],
+}
+
+static MEMO: AtomicPtr<Memo> = AtomicPtr::new(std::ptr::null_mut());
+/// Sérialise les écritures (rares) ; les lectures n'en ont pas besoin.
+static WRITE: Mutex<()> = Mutex::new(());
+
+fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    WRITE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Abandonne les mémoires : appelé à chaque nouvelle partie (DllCreateGameContext).
+pub fn reset() {
+    let _w = write_lock();
+    MEMO.store(std::ptr::null_mut(), Ordering::Release);
+}
+
+fn memo(list: (usize, usize)) -> &'static Memo {
+    let m = MEMO.load(Ordering::Acquire);
+    if !m.is_null() && unsafe { (*m).list } == list {
+        return unsafe { &*m };
+    }
+    let _w = write_lock();
+    let m = MEMO.load(Ordering::Acquire);
+    if !m.is_null() && unsafe { (*m).list } == list {
+        return unsafe { &*m };
+    }
+    let fresh: &'static Memo = Box::leak(Box::new(Memo {
+        list,
+        slots: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],
+        entries: AtomicUsize::new(0),
+        players: [const { AtomicPtr::new(std::ptr::null_mut()) }; PLAYERS],
+    }));
+    MEMO.store(fresh as *const Memo as *mut Memo, Ordering::Release);
+    fresh
+}
+
+fn slot(improvement: usize) -> usize {
+    (improvement >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - SLOTS.trailing_zeros())
+}
 
 unsafe fn same_cstr(a: usize, b: usize) -> bool {
     let (a, b) = (a as *const u8, b as *const u8);
@@ -116,20 +177,8 @@ unsafe fn same_cstr(a: usize, b: usize) -> bool {
     }
 }
 
-unsafe fn traits_of(improvement: usize) -> Arc<[usize]> {
-    let list_ptr = call!(LIST, fn() -> usize,);
-    let list = (rd::<usize>(list_ptr), rd::<usize>(list_ptr + 8));
-    let name = rd::<usize>(improvement + 0x30);
-    {
-        let t = TABLE.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(t) = t.as_ref().filter(|t| t.list == list) {
-            if let Some((n, traits)) = t.by_improvement.get(&improvement) {
-                if *n == name {
-                    return traits.clone();
-                }
-            }
-        }
-    }
+/// Le parcours par `strcmp` de l'originale : traits des entrées dont le nom est celui de l'amélioration.
+unsafe fn scan(list: (usize, usize), name: usize) -> Vec<usize> {
     let mut traits = Vec::new();
     let mut e = list.0;
     while e != list.1 {
@@ -139,13 +188,85 @@ unsafe fn traits_of(improvement: usize) -> Arc<[usize]> {
         }
         e += 8;
     }
-    let traits: Arc<[usize]> = traits.into();
-    let mut t = TABLE.write().unwrap_or_else(|e| e.into_inner());
-    if t.as_ref().map_or(true, |t| t.list != list) {
-        *t = Some(Table { list, by_improvement: HashMap::new() });
-    }
-    t.as_mut().unwrap().by_improvement.insert(improvement, (name, traits.clone()));
     traits
+}
+
+enum Traits {
+    Cached(&'static [usize]),
+    Fresh(Vec<usize>),
+}
+
+impl std::ops::Deref for Traits {
+    type Target = [usize];
+    fn deref(&self) -> &[usize] {
+        match self {
+            Traits::Cached(t) => t,
+            Traits::Fresh(t) => t,
+        }
+    }
+}
+
+unsafe fn traits_of(m: &'static Memo, improvement: usize) -> Traits {
+    let name = rd::<usize>(improvement + 0x30);
+    let mut i = slot(improvement);
+    loop {
+        let e = m.slots[i].load(Ordering::Acquire);
+        if e.is_null() {
+            break;
+        }
+        let e = &*e;
+        if e.improvement == improvement {
+            if e.name == name {
+                return Traits::Cached(&e.traits);
+            }
+            // Même adresse, autre nom : objet réutilisé sans changement de liste. On ne mémorise pas.
+            return Traits::Fresh(scan(m.list, name));
+        }
+        i = (i + 1) & (SLOTS - 1);
+    }
+    let traits = scan(m.list, name);
+    let _w = write_lock();
+    if m.entries.load(Ordering::Relaxed) >= MAX_ENTRIES {
+        return Traits::Fresh(traits);
+    }
+    let mut i = slot(improvement);
+    loop {
+        let e = m.slots[i].load(Ordering::Acquire);
+        if e.is_null() {
+            let e: &'static Entry = Box::leak(Box::new(Entry { improvement, name, traits: traits.into() }));
+            m.slots[i].store(e as *const Entry as *mut Entry, Ordering::Release);
+            m.entries.fetch_add(1, Ordering::Relaxed);
+            return Traits::Cached(&e.traits);
+        }
+        if (*e).improvement == improvement {
+            return Traits::Fresh(traits); // inséré entre-temps par un autre thread
+        }
+        i = (i + 1) & (SLOTS - 1);
+    }
+}
+
+/// Lignes de civilisation et de dirigeant du joueur. La civilisation et le dirigeant ne changent pas
+/// en cours de partie : on les mémorise par joueur, et on revérifie à chaque appel que la configuration
+/// du joueur est le même objet. L'originale les recalcule à chaque trait trouvé.
+unsafe fn civ_and_leader(m: &'static Memo, player: usize) -> (usize, usize) {
+    let id = rd::<u32>(player + 0xd8);
+    let config = rd::<usize>(gc(CONFIG));
+    let pc = call!(PLAYER_CONFIG, fn(usize, u32) -> usize, config + 0xd80, id);
+    let cached = m.players.get(id as usize);
+    if let Some(p) = cached.map(|c| c.load(Ordering::Acquire)).filter(|p| !p.is_null()) {
+        if (*p).pc == pc {
+            return ((*p).civ, (*p).leader);
+        }
+    }
+    let civ_type = call!(CIV_TYPE, fn(usize) -> u32, pc);
+    let civ = call!(FIND, fn(usize, u32) -> usize, call!(CIVS, fn() -> usize,), civ_type);
+    let leader_type = call!(LEADER_TYPE, fn(usize) -> u32, pc);
+    let leader = call!(FIND, fn(usize, u32) -> usize, call!(LEADERS, fn() -> usize,), leader_type);
+    if let Some(c) = cached {
+        let rows: &'static PlayerRows = Box::leak(Box::new(PlayerRows { pc, civ, leader }));
+        c.store(rows as *const PlayerRows as *mut PlayerRows, Ordering::Release);
+    }
+    (civ, leader)
 }
 
 unsafe fn contains(begin: usize, end: usize, value: usize) -> bool {
@@ -159,7 +280,8 @@ unsafe fn contains(begin: usize, end: usize, value: usize) -> bool {
     false
 }
 
-/// Même calcul que l'originale, sans le parcours par `strcmp`.
+/// Même réponse que l'originale, sans le parcours par `strcmp` ni la recherche répétée de la
+/// civilisation et du dirigeant.
 unsafe fn fast(player_id: u32, imp: usize) -> u8 {
     let player = call!(PLAYER, fn(u32) -> usize, player_id);
     if rd::<i32>(imp + 0x1c) == 0 {
@@ -183,18 +305,19 @@ unsafe fn fast(player_id: u32, imp: usize) -> u8 {
     if c != 0 && call!(HAS_CIVIC, fn(usize, u32) -> u8, rd::<usize>(player + 0x718), rd::<u32>(c + 0x14)) != 0 {
         return 0;
     }
-    for &tr in traits_of(imp).iter() {
-        let config = rd::<usize>(gc(CONFIG));
-        let pc = call!(PLAYER_CONFIG, fn(usize, u32) -> usize, config + 0xd80, rd::<u32>(player + 0xd8));
-        let civ_type = call!(CIV_TYPE, fn(usize) -> u32, pc);
-        let civ = call!(FIND, fn(usize, u32) -> usize, call!(CIVS, fn() -> usize,), civ_type);
-        if civ == 0 || contains(rd(civ + 0x108), rd(civ + 0x110), tr) {
-            return 0;
-        }
-        let pc = call!(PLAYER_CONFIG, fn(usize, u32) -> usize, config + 0xd80, rd::<u32>(player + 0xd8));
-        let leader_type = call!(LEADER_TYPE, fn(usize) -> u32, pc);
-        let leader = call!(FIND, fn(usize, u32) -> usize, call!(LEADERS, fn() -> usize,), leader_type);
-        if leader == 0 || contains(rd(leader + 0xb8), rd(leader + 0xc0), tr) {
+    let list_ptr = call!(LIST, fn() -> usize,);
+    let m = memo((rd::<usize>(list_ptr), rd::<usize>(list_ptr + 8)));
+    let traits = traits_of(m, imp);
+    if traits.is_empty() {
+        return 1;
+    }
+    // L'originale rend 0 dès que la civilisation ou le dirigeant est introuvable, ou a l'un des traits.
+    let (civ, leader) = civ_and_leader(m, player);
+    if civ == 0 || leader == 0 {
+        return 0;
+    }
+    for &tr in traits.iter() {
+        if contains(rd(civ + 0x108), rd(civ + 0x110), tr) || contains(rd(leader + 0xb8), rd(leader + 0xc0), tr) {
             return 0;
         }
     }
@@ -218,7 +341,8 @@ fn flush() {
     let ticks = TICKS.swap(0, Ordering::Relaxed);
     let mismatches = MISMATCHES.swap(0, Ordering::Relaxed);
     if calls > 0 {
-        let cached = TABLE.read().map(|t| t.as_ref().map_or(0, |t| t.by_improvement.len())).unwrap_or(0);
+        let m = MEMO.load(Ordering::Acquire);
+        let cached = if m.is_null() { 0 } else { unsafe { (*m).entries.load(Ordering::Relaxed) } };
         log(&format!(
             "ameliorations mode={:?} appels={calls} ms={:.1} ecarts={mismatches} table={cached}",
             mode(),

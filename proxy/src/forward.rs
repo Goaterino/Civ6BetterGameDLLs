@@ -61,6 +61,10 @@ macro_rules! forward {
             a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize,
         ) -> usize {
             static CACHE: AtomicUsize = AtomicUsize::new(0);
+            if $name == "DllCreateGameContext" {
+                // Nouvelle partie : les mémoires de la précédente ne valent plus.
+                crate::improvements::reset();
+            }
             let p = resolve(&CACHE, concat!($name, "\0").as_bytes());
             if p == 0 {
                 // DllCreateGameContext rend alors un contexte nul : le jeu signale l'échec.

@@ -190,13 +190,21 @@ threads :
 |---|---:|---:|---:|---:|---|
 | `verify` | 4,45 M + 4,44 M + 4,27 M | 13,2 s | 0,99 µs | **0** | 6 s / 6 s |
 | `count` | 13 166 324 | 11 009 ms | 0,84 µs | – | 6 s / 6 s |
-| `fast` | 13 166 078 | **4 380 ms** | 0,33 µs | – | **5 s / 4 s** |
+| `fast`, première version | 13 166 078 | 4 380 ms | 0,33 µs | – | 5 s / 4 s |
+| `verify`, deuxième version | 13 252 977 | 11,6 s | 0,89 µs | **0** | 6 s / 6 s |
+| `fast`, deuxième version | 13 166 078 | **1 609 ms** | 0,12 µs | – | **5 s / 4 s** |
 
-- **Le gain :** 6,6 s de CPU économisées en trois passages de tour, soit environ 2,2 s par passage,
+- **Le gain :** 9,4 s de CPU économisées en trois passages de tour, soit environ 3,1 s par passage,
   tous threads confondus. Les passages de tour, mesurés à la seconde près, gagnent 1 à 2 s.
-- **Ce qui reste dans les 0,33 µs :** les sous-appels, en particulier `1802209a0`, qui retrouve la
-  civilisation et le dirigeant par une recherche linéaire, ainsi que le verrou de la table et les
-  deux lectures du compteur de performance.
+- **La deuxième version.** Une capture WPR en mode `quiet` montrait 417 ms dans le proxy lui-même :
+  le `RwLock` de la table était en contention, et un compteur de références (`Arc`) changeait à chaque
+  appel, depuis 13 threads. S'y ajoutaient 253 ms de `1802209a0`, la recherche dichotomique de la
+  civilisation et du dirigeant, que l'original refait à chaque trait trouvé. La table est maintenant
+  lue sans verrou : entrées jamais libérées, publiées par pointeur atomique. La civilisation et le
+  dirigeant sont mémorisés par joueur, revérifiés à chaque appel par l'adresse de la configuration du
+  joueur. Les mémoires sont abandonnées à chaque `DllCreateGameContext`.
+- **Ce qui reste dans les 0,12 µs :** les prérequis de technologie et de dogme, les deux lectures du
+  compteur de performance du mode `fast`, et l'entrée dans le détour.
 - **Le volume d'appels :** environ 4,4 millions par passage de tour. Les appelants (rendements de
   quartier, évaluation de l'IA) posent sans cesse la même question. Ce serait la cible suivante,
   mais une mémorisation par (joueur, amélioration) devrait être invalidée chaque fois qu'une
