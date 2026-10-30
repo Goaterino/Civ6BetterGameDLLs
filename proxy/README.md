@@ -277,9 +277,21 @@ touche pas au passage de tour. Contexte et mesures : [perf/nuke/README.md](../..
   `UserConfiguration.IsQuickCombat` : `140119880(140118ca0())`). Sans combat rapide, le nuke garde
   sa vitesse d'origine.
 - **Les détours de l'exe.** Ce sont les premiers posés hors de GameCore : les fonctions de
-  diffusion `1400f0400` et `1400f0460` de CivilizationVI_DX12.exe. Leur prologue lit un pointeur
-  relatif à RIP, que le trampoline relit en adressage absolu (`patch::install_at`). Avec un autre
-  exe (DX11, autre build), le module ne pose rien et le note dans le journal.
+  diffusion de `CombatVisBegin` et `CombatVisEnd`. Leur prologue lit un pointeur relatif à RIP,
+  que le trampoline relit en adressage absolu (`patch::install_at`).
+- **DX12 et DX11.** Les deux exe sont compilés des mêmes sources, avec les mêmes fonctions à
+  d'autres adresses. La table `EXES` donne un agencement par exe :
+
+  | | DX12 | DX11 |
+  |---|---|---|
+  | CombatVisBegin / End | `1400f0400` / `1400f0460` | `1400eff70` / `1400effd0` |
+  | configuration utilisateur, IsQuickCombat | `140118ca0`, `140119880` | `1401182e0`, `140118ec0` |
+  | objet application, échelle de temps | `[1412fa2c8]` + `0x559c` | `[1412c2c88]` + `0x557c` |
+
+  Les adresses DX11 viennent du projet Ghidra `civ6exe11`. Elles ont été retrouvées par les chaînes
+  `SerialEvent::CombatVis*` (fonctions d'enregistrement), `IsQuickCombat` (sa closure Lua) et
+  `timescale` (commande de console). Le module prend l'agencement dont tous les octets vérifiés
+  correspondent. Avec un autre build, il ne pose rien et le note dans le journal.
 - **Les garde-fous.** L'échelle d'origine revient à `CombatVisEnd`, ou au bout de 5 s. Elle revient
   aussi à chaque nouvelle partie et au déchargement du proxy.
 - **Le journal.** Une ligne `wmd : visualisation accélérée` par frappe, puis

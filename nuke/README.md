@@ -295,6 +295,13 @@ journal du proxy compte 7 frappes accélérées sur deux parties, chaque fois re
 désactivé, visualisation à vitesse normale`). Avec le combat rapide réactivé, les deux d'après
 sont de nouveau accélérées, à 0,64 et 0,65 s. Tim valide les deux cas.
 
+**Bombardier et sous-marin nucléaire.** Leurs frappes passent par `180156ae0`. Elles sont
+accélérées de la même façon que celles d'un silo (essai de Tim, 2026-10-30).
+
+**Exe DX11.** Le proxy reconnaît aussi `CivilizationVI.exe` (agencement `DX11` de `src/wmd.rs`).
+Essai de Tim : `wmd : détours posés (DX11)`, puis deux frappes accélérées. La première, qui
+déclare la guerre, dure 1,49 s, la suivante 0,68 s. Rien d'autre à signaler.
+
 ## Trace d'un lancer
 
 `hook_nuke.js` date et note la pile (24 cadres, `module!rva`) de :
