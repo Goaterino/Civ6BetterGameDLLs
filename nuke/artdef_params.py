@@ -1,6 +1,6 @@
 """Affiche les paramètres d'éléments d'un artdef, hors valeurs nulles ou fausses.
 
-    python -I perf/nuke/artdef_params.py <fichier .artdef> <collection> <élément>...
+    python -I nuke/artdef_params.py <fichier .artdef> <collection> <élément>...
 """
 import sys
 import xml.etree.ElementTree as ET

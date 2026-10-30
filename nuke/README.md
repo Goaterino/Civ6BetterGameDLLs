@@ -31,7 +31,7 @@ Adresses des projets Ghidra `civ6exe` (`CivilizationVI_DX12.exe`, base 0x1400000
 
 ## Première capture : 4 nukes sur un tour (2026-10-29)
 
-Journal `runs/20261029-224450/frida.log`, trace `perf/rollover/captures/20261029-224517-nuke`.
+Journal `runs/20261029-224450/frida.log`, trace `rollover/captures/20261029-224517-nuke`.
 L'analyse `attentes.py` est dans `runs/20261029-224450/attentes.txt`.
 
 - **Les tirs.** Les 4 nukes partent de villes (silo) : la pile GameCore passe par `180682fea`,
@@ -273,7 +273,7 @@ l'arc devient trop haut : la gravité du moteur n'est donc pas une simple accél
 
 ## Dans le proxy
 
-L'accélération est maintenant dans le proxy de GameCore ([perf/rollover/proxy](../rollover/proxy),
+L'accélération est maintenant dans le proxy de GameCore ([proxy](../proxy),
 module `src/wmd.rs`), avec le réglage `wmd_accel=20` de `rollover_proxy.cfg`. Elle reprend la logique
 de `hook_nuke.js --accel`, avec deux différences :
 - **Plusieurs frappes à la suite.** Les frappes calculées sont comptées, chacune attend sa
@@ -319,24 +319,24 @@ qu'il suit de près `gc_*Results`.
 
 ### Protocole
 
-1. Préparer une partie de test (multijoueur local, un humain, comme pour `perf/rollover`) :
+1. Préparer une partie de test (multijoueur local, un humain, comme pour `rollover`) :
    - un bombardier ou un silo en état de tirer, et une cible à portée ;
    - pour se donner une bombe, mettre `EnableTuner 1` dans `AppOptions.txt`, puis dans FireTuner
      (contexte GameCore) :
      `Players[0]:GetWMDs():ChangeWeaponCount(GameInfo.WMDs["WMD_NUCLEAR_DEVICE"].Index, 1)`.
 2. Jeu ouvert (version DX12), lancer le hook :
    ```bash
-   .venv/Scripts/python.exe -I perf/nuke/hook_nuke.py
+   .venv/Scripts/python.exe -I nuke/hook_nuke.py
    ```
 3. Dans un PowerShell administrateur, démarrer la capture WPR :
    ```bash
-   powershell -ExecutionPolicy Bypass -File perf\rollover\capture.ps1 -Name nuke
+   powershell -ExecutionPolicy Bypass -File rollover\capture.ps1 -Name nuke
    ```
 4. En vue 3D, lancer la bombe. Attendre d'avoir de nouveau la main, puis appuyer sur Entrée dans
    la fenêtre de capture et faire Ctrl+C dans celle du hook.
 5. Analyser les attentes. `attentes.py` trouve seul les visualisations de plus de 2 s et les
    threads GameCore et principal. Il compte aussi les attentes qui débordent de la fenêtre, ce que
-   `perf/rollover/waits.py` ne fait pas :
+   `rollover/waits.py` ne fait pas :
    ```bash
-   .venv/Scripts/python.exe -I perf/nuke/attentes.py perf/nuke/runs/<dossier>/frida.log perf/rollover/captures/<dossier>
+   .venv/Scripts/python.exe -I nuke/attentes.py nuke/runs/<dossier>/frida.log rollover/captures/<dossier>
    ```

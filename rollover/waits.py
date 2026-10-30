@@ -8,10 +8,10 @@ Pour le thread donné (en général le thread GameCore), dans la fenêtre donné
   de sa boucle principale (cadres sous exe+0x6ff769).
 
 Usage :
-    python -I perf/rollover/waits.py <dossier de capture> <tid> <début ISO> <fin ISO> [tid qui réveille]
+    python -I rollover/waits.py <dossier de capture> <tid> <début ISO> <fin ISO> [tid qui réveille]
 """
 import sys, pathlib, collections, bisect, datetime as dt
-sys.path.insert(0, r'C:/Users/ridel/Desktop/Civ6SimSolver/perf/rollover')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import analyze
 cap = pathlib.Path(sys.argv[1]); G = int(sys.argv[2])
 t0 = dt.datetime.fromisoformat(sys.argv[3]); t1 = dt.datetime.fromisoformat(sys.argv[4])

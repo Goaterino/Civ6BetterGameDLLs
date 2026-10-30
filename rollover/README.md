@@ -10,11 +10,11 @@ Outils pour mesurer où part le temps entre la fin d'un tour et la reprise de la
 - `analyze.py` : écrit `rapport.md` dans le dossier de capture.
   - Partie journaux : durées des passages de tour et délai par joueur.
   - Partie trace : threads, modules, arbre d'appels GameCore, fonctions et fichiers `.cpp`. Les noms
-    viennent de [la carte des sources](../../docs/gamecore_xp2/README.md).
+    viennent de [la carte des sources](../docs/gamecore_xp2/README.md).
   - Fenêtre : par défaut, le dernier passage de tour des journaux ; `--tout` pour la capture entière.
 
 ```bash
-.venv/Scripts/python.exe -I perf/rollover/analyze.py perf/rollover/captures/<dossier>
+.venv/Scripts/python.exe -I rollover/analyze.py rollover/captures/<dossier>
 ```
 
 Les captures (`captures/`) ne sont pas versionnées.

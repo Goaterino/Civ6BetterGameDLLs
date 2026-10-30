@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+/proxy/target/
+/rollover/captures/
+nuke/runs/
+netcode/runs/

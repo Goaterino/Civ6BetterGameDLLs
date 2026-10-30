@@ -1,6 +1,6 @@
 # Proxy de GameCore : regroupement des instantanés de villes
 
-Prototype de la piste 1 de [cascade_guerre.md](../cascade_guerre.md). Pendant une cascade de
+Prototype de la piste 1 de [cascade_guerre.md](../rollover/cascade_guerre.md). Pendant une cascade de
 déclarations de guerre, le jeu refait l'instantané de toutes les villes des belligérants à chaque
 déclaration : environ 2 900 instantanés pour 61 villes au tour 79, soit 2,2 s. Le proxy n'en fait plus
 qu'un par couple (événement, joueur), à la fin de la cascade.
@@ -73,13 +73,13 @@ cascade mode=Count declarewar=358 profondeur_max=… instantanes_demandes=… un
 ## Compiler, tester, installer
 
 ```bash
-cd perf/rollover/proxy && cargo build --release
+cd proxy && cargo build --release
 ```
 
 **Régénérer la table des exports**, après une mise à jour du jeu :
 
 ```bash
-.venv/Scripts/python.exe -I perf/rollover/proxy/gen_exports.py "<jeu>\DLC\Expansion2\Binaries\Win64\GameCore_XP2_FinalRelease.dll" perf/rollover/proxy/src/exports.rs
+.venv/Scripts/python.exe -I proxy/gen_exports.py "<jeu>\DLC\Expansion2\Binaries\Win64\GameCore_XP2_FinalRelease.dll" proxy/src/exports.rs
 ```
 
 **Test hors jeu.** Il vérifie :
@@ -92,7 +92,7 @@ L'original refuse de s'initialiser hors du jeu : le test le projette d'abord san
 et le proxy récupère ce module tel quel.
 
 ```bash
-.venv/Scripts/python.exe -I perf/rollover/proxy/tests/check_hooks.py <proxy compilé> <GameCore_XP2_FinalRelease.dll d'origine> <dossier temporaire>
+.venv/Scripts/python.exe -I proxy/tests/check_hooks.py <proxy compilé> <GameCore_XP2_FinalRelease.dll d'origine> <dossier temporaire>
 ```
 
 **Installation**, jeu fermé. Le script :
@@ -105,11 +105,11 @@ du jeu remet aussi l'original : il faut alors réinstaller. Si l'original est en
 `_orig` existe déjà, le script s'arrête plutôt que de choisir lequel garder.
 
 ```bash
-powershell -ExecutionPolicy Bypass -File perf/rollover/proxy/install.ps1 -Mode count
+powershell -ExecutionPolicy Bypass -File proxy/install.ps1 -Mode count
 ```
 
 ```bash
-powershell -ExecutionPolicy Bypass -File perf/rollover/proxy/install.ps1 -Uninstall
+powershell -ExecutionPolicy Bypass -File proxy/install.ps1 -Uninstall
 ```
 
 ## Protocole de mesure en jeu
@@ -262,7 +262,7 @@ Trois chantiers menés ensemble, chacun avec son réglage et sa boucle count →
 ## Quatrième détour : accélération de l'animation des WMD
 
 [src/wmd.rs](src/wmd.rs), réglage `wmd_accel=<facteur>|off`, 20 par défaut (`-WmdAccel`). Il ne
-touche pas au passage de tour. Contexte et mesures : [perf/nuke/README.md](../../nuke/README.md).
+touche pas au passage de tour. Contexte et mesures : [nuke/README.md](../nuke/README.md).
 
 - **Le but.** La visualisation d'un nuke (`CombatVisBegin` → `CombatVisEnd`) dure 11 à 12 s et
   retient toutes les autres animations. Pendant cette seule visualisation, le proxy multiplie
@@ -296,6 +296,48 @@ touche pas au passage de tour. Contexte et mesures : [perf/nuke/README.md](../..
   aussi à chaque nouvelle partie et au déchargement du proxy.
 - **Le journal.** Une ligne `wmd : visualisation accélérée` par frappe, puis
   `wmd : échelle rendue à 1 (fin de visualisation, … ms)`.
+
+## Cinquième accroche : boutons d'attaque des bannières
+
+[src/ui.rs](src/ui.rs). Analyse : [ui_strike/README.md](../ui_strike/README.md). Le proxy
+modifie l'interface au moment où l'exe lit ses fichiers, sans mod ni rien à partager avec les autres
+joueurs.
+
+| réglage | défaut | effet |
+|---|---|---|
+| `ui_boutons=on\|off` (`-UiBoutons`) | on | boutons d'attaque (ville, campement) et de frappe nucléaire (silo) au-dessus des drapeaux d'unités ; `ConsumeMouse` sur les boutons nucléaires |
+| `ui_recentrage=on\|off` (`-UiRecentrage`) | off | off : plus de recentrage de la caméra au clic sur ces boutons |
+| `ui_journal=on\|off` (`-UiJournal`) | off | note chaque script Lua et chaque XML lus |
+
+- **Lua.** L'entrée `luaL_loadbuffer` de la table d'imports de l'exe est remplacée : il suffit de
+  changer un pointeur, sans réécrire d'instruction, et cela marche en DX12 comme en DX11. Pour
+  `CityBannerManager.lua`, quel que soit le mod qui le fournit (Better Spectator Mod dans nos
+  parties), le proxy compile un texte modifié :
+  - les trois fonctions de clic passent `false` en second argument de `UI.SelectCity` /
+    `UI.SelectDistrict` ;
+  - [src/ui_boutons.lua](src/ui_boutons.lua) est ajouté à la fin du fichier.
+- **XML.** La lecture d'un XML entier (`140a2d280` en DX12, `140a1f3f0` en DX11) est retrouvée par
+  une signature de 71 octets, unique dans les deux exe. Après la lecture de
+  `CityBannerInstances.xml`, le tampon du jeu est réécrit avec son propre allocateur. On y ajoute les
+  calques de [src/ui_boutons.xml](src/ui_boutons.xml) et `ConsumeMouse="1"` sur `NukeBombButton` et
+  `ThermoNukeBombButton`. Le patch n'est appliqué que si les cadres reproduits par les calques sont
+  présents tels quels.
+- **Au-dessus des drapeaux.** Chaque calque reproduit le cadre de sa bannière : même `ZoomAnchor`,
+  même ancrage, même taille. Le bloc Lua y déplace le bouton (`ChangeParent`), qui garde ainsi sa
+  place, ses rappels et ses mises à jour. Le calque est ensuite placé dans `SelectedUnitContainer`,
+  que `InGame.xml` dessine après `BannerAndFlags`. `MapPinManager.lua` fait de même avec l'épingle
+  sélectionnée.
+- **Suivi des bannières.** Le bloc enveloppe les méthodes de `CityBanner` qui positionnent
+  (`UpdatePosition`), masquent (`UpdateVisibility`, `UpdateRangeStrike`, `UpdateWMDBanner`) ou
+  libèrent (`Uninitialize`) la bannière. Il masque aussi les calques pendant la révélation d'une
+  merveille, et remet chaque bouton dans sa bannière à l'arrêt du contexte.
+- **Le journal.** `ui : accroches posées (…)` au chargement de la partie. Puis
+  `ui : …CityBannerInstances.xml : calques ajoutés`, et
+  `ui : …CityBannerManager.lua modifié (…), compilation réussie`. `Lua.log` doit contenir
+  `Civ6RolloverProxy : boutons d'attaque au-dessus des drapeaux d'unités`.
+- **Tests hors jeu** (`cargo test --release`) : les remplacements de texte sur les fichiers du jeu et
+  sur ceux de BSM, le bon format du XML, l'adresse trouvée par la signature dans les deux exe, la
+  lecture de la table d'imports. Le bloc Lua passe `luac -p`.
 
 ## Limites du prototype
 

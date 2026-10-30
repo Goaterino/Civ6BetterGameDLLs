@@ -1,0 +1,23 @@
+
+	<!-- Civ6RolloverProxy (src/ui_boutons.xml) : calques des boutons d'attaque. Chacun reproduit le
+	     cadre de sa bannière (ZoomAnchor, ancrage, taille) pour que le bouton déplacé y garde sa
+	     place ; ui_boutons.lua les met dans SelectedUnitContainer, dessiné après les drapeaux. -->
+	<Instance Name="ProxyStrikeCity">
+		<ZoomAnchor ID="Anchor" ZoomOffsetNear="0,0,0" ZoomOffsetFar="0,0,-20">
+			<Container ID="Frame" Anchor="C,C" Offset="0,-20" Size="200,41"/>
+		</ZoomAnchor>
+	</Instance>
+	<Instance Name="ProxyStrikeEncampment">
+		<ZoomAnchor ID="Anchor" ZoomOffsetNear="0,0,0" ZoomOffsetFar="0,0,-20">
+			<Container ID="Frame" Anchor="C,C" Size="106,34"/>
+		</ZoomAnchor>
+	</Instance>
+	<Instance Name="ProxyStrikeWMD">
+		<ZoomAnchor ID="Anchor" ZoomOffsetNear="0,0,0" ZoomOffsetFar="0,0,-20">
+			<Container ID="Frame" Anchor="C,C" Size="88,34">
+				<Container ID="NukeSlot" Anchor="L,C" Offset="25,0"/>
+				<Container ID="ThermoSlot" Anchor="R,C" Offset="25,0"/>
+			</Container>
+		</ZoomAnchor>
+	</Instance>
+

@@ -8,7 +8,7 @@ de 2 s. Le thread GameCore est celui du dernier gc_*Results qui précède. Pour 
 - pour le thread principal, les branches sous la boucle principale (exe+0x6ff769).
 
 Usage :
-    python -I perf/nuke/attentes.py <journal frida.log> <dossier de capture>
+    python -I nuke/attentes.py <journal frida.log> <dossier de capture>
 """
 import bisect
 import collections

@@ -1,6 +1,6 @@
 //! Regroupement des instantanés de l'interface : villes d'un joueur et diplomatie d'un joueur.
 //!
-//! Voir perf/rollover/cascade_guerre.md :
+//! Voir rollover/cascade_guerre.md :
 //! - `180072f80(événement, joueur)` refait l'instantané de toutes les villes d'un joueur ;
 //! - `1800b7630(événement, joueur)` refait l'instantané diplomatique d'un joueur envers tous les
 //!   autres, infobulles de `1801d02d0` comprises.

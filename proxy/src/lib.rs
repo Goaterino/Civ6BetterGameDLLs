@@ -6,7 +6,8 @@
 //! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, lignes `mode=coalesce|count|off`
 //! (coalesce par défaut), `portee=cascade|message` (cascade par défaut),
 //! `ameliorations=off|count|verify|fast|quiet` et `rendements=off|count|verify|fast|quiet` (off par
-//! défaut), `wmd_accel=<facteur>|off` (20 par défaut, voir `wmd`). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier Logs du jeu.
+//! défaut), `wmd_accel=<facteur>|off` (20 par défaut, voir `wmd`), `ui_boutons`, `ui_recentrage` et
+//! `ui_journal` (voir `ui`). Journal : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier Logs du jeu.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
 
@@ -15,6 +16,7 @@ mod forward;
 mod improvements;
 mod patch;
 mod rendements;
+mod ui;
 mod win;
 mod wmd;
 
@@ -105,6 +107,15 @@ pub(crate) fn read_config() {
             // `off`, 1 ou une valeur illisible : pas d'accélération.
             wmd::set_factor(v.trim().parse::<f32>().ok().filter(|f| f.is_finite() && *f >= 1.0).unwrap_or(1.0));
         }
+        if let Some(v) = line.trim().strip_prefix("ui_boutons=") {
+            ui::set_boutons(v.trim() != "off");
+        }
+        if let Some(v) = line.trim().strip_prefix("ui_recentrage=") {
+            ui::set_recentrage(v.trim() == "on");
+        }
+        if let Some(v) = line.trim().strip_prefix("ui_journal=") {
+            ui::set_journal(v.trim() == "on");
+        }
     }
 }
 
@@ -123,6 +134,7 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, reserve
             improvements::on_proxy_unload();
             rendements::on_proxy_unload();
             wmd::on_proxy_unload();
+            ui::on_proxy_unload();
         }
         _ => {}
     }

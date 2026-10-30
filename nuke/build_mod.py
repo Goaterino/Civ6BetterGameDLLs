@@ -1,6 +1,6 @@
 """Construit le mod « Nuke Quick Vis », qui raccourcit la visualisation des WMD.
 
-    python -I perf/nuke/build_mod.py [--vitesse 10] [--gravite 50] [--impact AtomBomb_Hit]
+    python -I nuke/build_mod.py [--vitesse 10] [--gravite 50] [--impact AtomBomb_Hit]
         [--modele-silo Special/TargetPlot] [--dest <dossier Mods>]
 
 Il recopie les six attaques WMD de Base/ArtDefs/Units.artdef dans un Units.artdef partiel et

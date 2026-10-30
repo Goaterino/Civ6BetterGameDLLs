@@ -36,6 +36,7 @@ pub(crate) fn real_module() -> usize {
         crate::improvements::on_gamecore_loaded(h);
         crate::rendements::on_gamecore_loaded(h);
         crate::wmd::on_gamecore_loaded(h);
+        crate::ui::on_gamecore_loaded();
         h
     })
 }

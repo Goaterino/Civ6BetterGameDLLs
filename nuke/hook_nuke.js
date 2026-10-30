@@ -195,7 +195,7 @@ function onModule(mod) {
     if (name === 'civilizationvi_dx12.exe' || name === 'civilizationvi.exe') {
         hookExe(mod);
     } else if (GC_NAMES.includes(name)) {
-        // Avec le proxy de perf/rollover, les deux noms sont chargés : seul l'original a les bons octets.
+        // Avec le proxy de GameCore (proxy/), les deux noms sont chargés : seul l'original a les bons octets.
         if (checkBytes(mod.base, GC.icbmResults.rva, GC.icbmResults.bytes)) hookGameCore(mod);
     }
 }

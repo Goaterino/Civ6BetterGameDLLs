@@ -1,4 +1,4 @@
-//! Accélération de l'affichage pendant la visualisation d'une frappe WMD (voir perf/nuke/README.md).
+//! Accélération de l'affichage pendant la visualisation d'une frappe WMD (voir nuke/README.md).
 //!
 //! Un nuke se visualise comme un combat, de `CombatVisBegin` à `CombatVisEnd`, pendant 11 à 12 s
 //! qui retiennent toutes les autres animations. Pendant cette seule visualisation, on multiplie

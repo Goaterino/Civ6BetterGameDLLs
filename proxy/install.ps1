@@ -1,7 +1,7 @@
 ﻿# Installe (ou retire avec -Uninstall) le proxy de GameCore_XP2_FinalRelease.dll.
-#   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Mode count
-#   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Ameliorations verify
-#   powershell -ExecutionPolicy Bypass -File perf\rollover\proxy\install.ps1 -Uninstall
+#   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Mode count
+#   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Ameliorations verify
+#   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Uninstall
 # L'original est renommé GameCore_XP2_FinalRelease_orig.dll, jamais supprimé ; le proxy prend son
 # nom. -Uninstall remet l'original en place. Une vérification des fichiers par Steam ou une mise à
 # jour du jeu remet aussi l'original : il faut alors réinstaller.
@@ -20,6 +20,14 @@ param(
     # Accélération de l'affichage pendant la visualisation d'un nuke, si le combat rapide est
     # activé : facteur, ou off. Voir src/wmd.rs.
     [string]$WmdAccel = "20",
+    # Boutons d'attaque et de frappe nucléaire des bannières au-dessus des drapeaux d'unités, recentrage
+    # de la caméra au clic sur ces boutons, journal des scripts et XML lus. Voir src/ui.rs.
+    [ValidateSet("on", "off")]
+    [string]$UiBoutons = "on",
+    [ValidateSet("on", "off")]
+    [string]$UiRecentrage = "off",
+    [ValidateSet("on", "off")]
+    [string]$UiJournal = "off",
     [switch]$Uninstall,
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI"
 )
@@ -65,6 +73,6 @@ if (-not (Test-Ours $dll)) {
     Rename-Item $dll (Split-Path $orig -Leaf)
 }
 Copy-Item $built $dll -Force
-Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel"
-Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
+Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel", "ui_boutons=$UiBoutons", "ui_recentrage=$UiRecentrage", "ui_journal=$UiJournal"
+Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel, ui_boutons $UiBoutons, ui_recentrage $UiRecentrage, ui_journal $UiJournal) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
 Write-Host "Journal : $env:LOCALAPPDATA\Civ6RolloverProxy\RolloverProxy.log"

@@ -1,6 +1,6 @@
 """Génère src/exports.rs : un relais par export de la DLL d'origine, sous le même nom.
 
-    python -I perf/rollover/proxy/gen_exports.py <GameCore_XP2_FinalRelease.dll> perf/rollover/proxy/src/exports.rs
+    python -I proxy/gen_exports.py <GameCore_XP2_FinalRelease.dll> proxy/src/exports.rs
 
 Les 157 exports de GameCore_XP2 sont tous du code (vérifié : leurs adresses tombent dans .text).
 """

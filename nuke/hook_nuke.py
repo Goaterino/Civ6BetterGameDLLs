@@ -1,9 +1,9 @@
 """Attache hook_nuke.js au jeu et écrit ses événements dans un journal horodaté.
 
-    .venv/Scripts/python.exe -I perf/nuke/hook_nuke.py [--accel 3] [dossier]
+    .venv/Scripts/python.exe -I nuke/hook_nuke.py [--accel 3] [dossier]
 
 Lancer après avoir démarré le jeu (version DX12). Le journal va dans <dossier>/frida.log, par défaut
-perf/nuke/runs/<date-heure>/. Ctrl+C pour arrêter.
+nuke/runs/<date-heure>/. Ctrl+C pour arrêter.
 
 --accel : pendant la visualisation d'une frappe WMD, multiplie l'échelle de temps de l'affichage
 (celle de la commande de console « timescale ») ; elle est remise à sa valeur à CombatVisEnd et au

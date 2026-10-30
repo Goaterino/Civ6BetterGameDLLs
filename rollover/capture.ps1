@@ -1,8 +1,8 @@
 ﻿# Capture WPR (profil CPU échantillonné, avec piles) d'un passage de tour de Civ6.
 # À lancer dans un PowerShell administrateur, jeu ouvert, juste avant de finir le tour :
-#   powershell -ExecutionPolicy Bypass -File perf\rollover\capture.ps1 -Name tour79
+#   powershell -ExecutionPolicy Bypass -File rollover\capture.ps1 -Name tour79
 # Puis analyser (sans droits admin) :
-#   .venv\Scripts\python.exe -I perf\rollover\analyze.py perf\rollover\captures\<dossier>
+#   .venv\Scripts\python.exe -I rollover\analyze.py rollover\captures\<dossier>
 param(
     [string]$Name = "passage",
     # Ajoute les E/S disque et fichier, pour voir le coût de la sauvegarde auto.

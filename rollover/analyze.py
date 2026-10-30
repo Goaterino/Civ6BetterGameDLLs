@@ -6,7 +6,7 @@ Deux sources :
   lue directement par etl.py puis gardée en cache (trace.pkl).
 
 Usage :
-    python -I perf/rollover/analyze.py <dossier de capture ou dossier Logs du jeu> [--tout]
+    python -I rollover/analyze.py <dossier de capture ou dossier Logs du jeu> [--tout]
 
 Écrit rapport.md dans le dossier analysé (ou dans --out).
 """
@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import etl as etl_reader  # noqa: E402
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+REPO = pathlib.Path(__file__).resolve().parents[1]
 FUNCTIONS_TSV = REPO / "docs" / "gamecore_xp2" / "functions.tsv"
 GAMECORE = "gamecore_xp2_finalrelease.dll"
 GAMECORE_ORIG = "gamecore_xp2_finalrelease_orig.dll"
