@@ -271,6 +271,30 @@ l'arc devient trop haut : la gravité du moteur n'est donc pas une simple accél
 - Ce qui accélère pendant la fenêtre ne relève que de l'affichage local : animations, effets,
   caméra, et sans doute les scripts d'interface rafraîchis avec le pas de frame.
 
+## Dans le proxy
+
+L'accélération est maintenant dans le proxy de GameCore ([perf/rollover/proxy](../rollover/proxy),
+module `src/wmd.rs`), avec le réglage `wmd_accel=20` de `rollover_proxy.cfg`. Elle reprend la logique
+de `hook_nuke.js --accel`, avec deux différences :
+- **Plusieurs frappes à la suite.** Les frappes calculées sont comptées, chacune attend sa
+  visualisation pendant 3 s après la frappe précédente ou la fin de la visualisation accélérée
+  précédente.
+- **Le combat rapide.** L'accélération n'a lieu que si le joueur a activé le combat rapide.
+  Sinon, l'animation garde sa vitesse d'origine.
+
+**Essai en jeu (2026-10-30, ×20, combat rapide activé).** Tim trouve le résultat nickel. Le
+journal du proxy compte 7 frappes accélérées sur deux parties, chaque fois rendues à 1 à
+`CombatVisEnd` :
+- le premier tir de chaque partie, qui déclare la guerre, dure 1,19 s et 1,47 s ;
+- les suivants durent 0,62 et 0,66 s ;
+- le mod « Nuke Quick Vis » était encore actif et faussait l'animation, ce qui explique les trois
+  tirs à 0,39 – 0,42 s. Il est maintenant supprimé du dossier Mods, `build_mod.py` reste là pour
+  le régénérer.
+
+**Sans combat rapide.** Les deux frappes suivantes gardent leur vitesse d'origine (`combat rapide
+désactivé, visualisation à vitesse normale`). Avec le combat rapide réactivé, les deux d'après
+sont de nouveau accélérées, à 0,64 et 0,65 s. Tim valide les deux cas.
+
 ## Trace d'un lancer
 
 `hook_nuke.js` date et note la pile (24 cadres, `module!rva`) de :

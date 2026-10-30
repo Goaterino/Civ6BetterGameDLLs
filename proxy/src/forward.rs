@@ -35,6 +35,7 @@ pub(crate) fn real_module() -> usize {
         coalesce::on_gamecore_loaded(h);
         crate::improvements::on_gamecore_loaded(h);
         crate::rendements::on_gamecore_loaded(h);
+        crate::wmd::on_gamecore_loaded(h);
         h
     })
 }
@@ -65,6 +66,7 @@ macro_rules! forward {
             if $name == "DllCreateGameContext" {
                 // Nouvelle partie : les mémoires de la précédente ne valent plus.
                 crate::improvements::reset();
+                crate::wmd::reset();
             }
             let p = resolve(&CACHE, concat!($name, "\0").as_bytes());
             if p == 0 {

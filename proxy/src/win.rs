@@ -14,6 +14,7 @@ pub const DLL_PROCESS_ATTACH: u32 = 1;
 #[link(name = "kernel32")]
 extern "system" {
     pub fn LoadLibraryW(name: *const u16) -> HMODULE;
+    pub fn GetModuleHandleW(name: *const u16) -> HMODULE;
     pub fn GetModuleFileNameW(module: HMODULE, buffer: *mut u16, size: u32) -> u32;
     pub fn GetProcAddress(module: HMODULE, name: *const u8) -> *mut c_void;
     pub fn VirtualAlloc(address: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;

@@ -57,6 +57,9 @@ Le mode se règle dans `rollover_proxy.cfg`, à côté de la DLL, par une ligne 
 | `count` | pose les détours, ne change rien, compte et chronomètre les cascades |
 | `off` | aucun détour |
 
+Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`) sont décrits plus
+bas, avec leur détour.
+
 **Journal** : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier `Logs` du jeu.
 On y trouve :
 - `proxy chargé dans <exe>`, au premier appel relayé ;
@@ -255,6 +258,32 @@ Trois chantiers menés ensemble, chacun avec son réglage et sa boucle count →
 |---|---|---|
 | mesure | `-Mode count -Portee message -Ameliorations quiet -Rendements verify` | lignes `cascade`, `passes` (demandés contre uniques) et `rendements` (`trouves`, `ecarts` = 0 ?), `AutoSave_0080` |
 | remplacement | `-Mode coalesce -Portee message -Ameliorations quiet -Rendements fast` | durées de passage, `AutoSave_0080` comparée à celle de la mesure (`compare_saves.py`), puis contrôle de synchronisation en ligne |
+
+## Quatrième détour : accélération de l'animation des WMD
+
+[src/wmd.rs](src/wmd.rs), réglage `wmd_accel=<facteur>|off`, 20 par défaut (`-WmdAccel`). Il ne
+touche pas au passage de tour. Contexte et mesures : [perf/nuke/README.md](../../nuke/README.md).
+
+- **Le but.** La visualisation d'un nuke (`CombatVisBegin` → `CombatVisEnd`) dure 11 à 12 s et
+  retient toutes les autres animations. Pendant cette seule visualisation, le proxy multiplie
+  l'échelle de temps de l'affichage (App+0x559c, celle de la commande de console `timescale`) :
+  ×20 la ramène à environ 0,6 s, la durée d'un combat d'unités.
+- **Sans effet sur la partie.** GameCore et le minuteur de tour comptent en
+  QueryPerformanceCounter et ne voient pas cette échelle. Rien ne part sur le réseau : chaque
+  joueur qui a le proxy accélère son propre affichage.
+- **La condition.** Une frappe a été calculée par le thread GameCore pendant la vidange de sa file
+  (`180158af0` ou `180156ae0`, sous `1800372f0`), il y a moins de 3 s. La visualisation n'a qu'un
+  membre, le tireur. Le joueur a activé le combat rapide (Options → Jeu, lu comme
+  `UserConfiguration.IsQuickCombat` : `140119880(140118ca0())`). Sans combat rapide, le nuke garde
+  sa vitesse d'origine.
+- **Les détours de l'exe.** Ce sont les premiers posés hors de GameCore : les fonctions de
+  diffusion `1400f0400` et `1400f0460` de CivilizationVI_DX12.exe. Leur prologue lit un pointeur
+  relatif à RIP, que le trampoline relit en adressage absolu (`patch::install_at`). Avec un autre
+  exe (DX11, autre build), le module ne pose rien et le note dans le journal.
+- **Les garde-fous.** L'échelle d'origine revient à `CombatVisEnd`, ou au bout de 5 s. Elle revient
+  aussi à chaque nouvelle partie et au déchargement du proxy.
+- **Le journal.** Une ligne `wmd : visualisation accélérée` par frappe, puis
+  `wmd : échelle rendue à 1 (fin de visualisation, … ms)`.
 
 ## Limites du prototype
 

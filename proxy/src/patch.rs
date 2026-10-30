@@ -44,10 +44,14 @@ pub unsafe fn check(base: usize, sites: &[Site]) -> Result<(), String> {
 
 /// Remet les octets d'origine au site (le trampoline reste alloué, il n'est plus visé).
 pub unsafe fn restore(base: usize, site: &Site) {
-    let at = base + (site.address - IMAGE_BASE) as usize;
+    restore_at(base + (site.address - IMAGE_BASE) as usize, site.expected);
+}
+
+/// Remet en `at` les premiers octets de `original`, ceux qu'écrase le saut.
+pub unsafe fn restore_at(at: usize, original: &[u8]) {
     let mut old = 0u32;
     if win::VirtualProtect(at as *mut c_void, JMP_LEN, win::PAGE_EXECUTE_READWRITE, &mut old) != 0 {
-        std::ptr::copy_nonoverlapping(site.expected.as_ptr(), at as *mut u8, JMP_LEN);
+        std::ptr::copy_nonoverlapping(original.as_ptr(), at as *mut u8, JMP_LEN);
         win::VirtualProtect(at as *mut c_void, JMP_LEN, old, &mut old);
         win::FlushInstructionCache(win::GetCurrentProcess(), at as *const c_void, JMP_LEN);
     }
@@ -56,23 +60,28 @@ pub unsafe fn restore(base: usize, site: &Site) {
 /// Pose le détour et rend l'adresse du trampoline, qui exécute la fonction d'origine.
 pub unsafe fn install(base: usize, site: &Site, hook: usize) -> Result<usize, String> {
     let at = base + (site.address - IMAGE_BASE) as usize;
-    let copied = &site.expected[site.copy.0..site.copy.1];
+    install_at(site.name, at, &site.expected[site.copy.0..site.copy.1], at + site.resume, hook)
+}
+
+/// Écrase `at` par un saut vers `hook` et rend un trampoline qui exécute `prologue` puis saute à
+/// `resume`. `prologue` peut différer des octets du site, pour y refaire une instruction relative
+/// à RIP en adressage absolu.
+pub unsafe fn install_at(name: &str, at: usize, prologue: &[u8], resume: usize, hook: usize) -> Result<usize, String> {
     let tramp = win::VirtualAlloc(
         std::ptr::null_mut(),
-        copied.len() + JMP_LEN,
+        prologue.len() + JMP_LEN,
         win::MEM_COMMIT | win::MEM_RESERVE,
         win::PAGE_EXECUTE_READWRITE,
     ) as *mut u8;
     if tramp.is_null() {
-        return Err(format!("{} : VirtualAlloc a échoué", site.name));
+        return Err(format!("{name} : VirtualAlloc a échoué"));
     }
-    std::ptr::copy_nonoverlapping(copied.as_ptr(), tramp, copied.len());
-    let resume = (at + site.resume) as u64;
-    std::ptr::copy_nonoverlapping(jmp_abs(resume).as_ptr(), tramp.add(copied.len()), JMP_LEN);
+    std::ptr::copy_nonoverlapping(prologue.as_ptr(), tramp, prologue.len());
+    std::ptr::copy_nonoverlapping(jmp_abs(resume as u64).as_ptr(), tramp.add(prologue.len()), JMP_LEN);
 
     let mut old = 0u32;
     if win::VirtualProtect(at as *mut c_void, JMP_LEN, win::PAGE_EXECUTE_READWRITE, &mut old) == 0 {
-        return Err(format!("{} : VirtualProtect a échoué", site.name));
+        return Err(format!("{name} : VirtualProtect a échoué"));
     }
     std::ptr::copy_nonoverlapping(jmp_abs(hook as u64).as_ptr(), at as *mut u8, JMP_LEN);
     win::VirtualProtect(at as *mut c_void, JMP_LEN, old, &mut old);
