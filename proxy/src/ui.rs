@@ -17,6 +17,10 @@
 //! - `ui_recentrage=on|off` (off) : off retire le recentrage de la caméra au clic sur ces boutons,
 //!   en passant `false` en second argument de `UI.SelectCity` / `UI.SelectDistrict` ;
 //! - `ui_journal=on|off` (off) : note le nom de chaque script et de chaque XML chargés.
+//!
+//! Dès que l'accroche Lua est posée, deux défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
+//! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), et un clic sur le
+//! drapeau d'une unité ne tirait pas en visée d'une ville ou d'un quartier (`patch_unit_flags`).
 
 use crate::{log, patch, win};
 use std::ffi::{c_char, c_void, CStr};
@@ -113,6 +117,73 @@ pub fn patch_lua(src: &[u8], boutons: bool, recentrage: bool) -> (Option<Vec<u8>
     (changed.then(|| text.into_bytes()), notes)
 }
 
+/// Corrige la faute de `CityPanel.lua` (OnCitySelectionChanged) qui coûte un second clic au bouton
+/// d'attaque d'une ville non sélectionnée. Le clic sélectionne la ville puis passe en
+/// CITY_RANGE_ATTACK ; l'événement CitySelectionChanged arrive ensuite et doit garder ce mode si la
+/// ville peut tirer, mais teste `CityManager.GetCity(owningPlayerID, cityID)`, alors que le
+/// paramètre s'appelle `ownerPlayerID`. Avec un joueur nil, le test échoue toujours et l'interface
+/// repasse en SELECTION.
+pub fn patch_city_panel(src: &[u8]) -> Result<Vec<u8>, String> {
+    const HEADER: &str = "function OnCitySelectionChanged( ownerPlayerID";
+    const WRONG: &str = "CityManager.GetCity(owningPlayerID, cityID)";
+    let text = std::str::from_utf8(src).map_err(|_| "texte non UTF-8".to_string())?;
+    let start = text.find(HEADER).ok_or("OnCitySelectionChanged( ownerPlayerID… introuvable")?;
+    let end = text[start + HEADER.len()..].find("\nfunction ").map_or(text.len(), |i| start + HEADER.len() + i);
+    let body = &text[start..end];
+    if body.contains("local owningPlayerID") {
+        return Err("owningPlayerID est défini dans la fonction".into());
+    }
+    let at = body.find(WRONG).ok_or("appel fautif introuvable (déjà corrigé ?)")? + start;
+    let mut out = text.to_owned();
+    out.replace_range(at..at + WRONG.len(), "CityManager.GetCity(ownerPlayerID, cityID)");
+    Ok(out.into_bytes())
+}
+
+const FLAG_BLOCK: &str = include_str!("ui_drapeaux.lua");
+
+/// En visée d'une ville ou d'un quartier, un clic gauche sur le drapeau d'une unité étrangère ne
+/// tirait pas : `OnUnitFlagClick` ne sait faire attaquer que l'unité sélectionnée, et le drapeau
+/// prend le clic avant WorldInput. Les deux clics gauches des drapeaux passent par
+/// `Civ6RolloverProxy_OnUnitFlagLClick` (ui_drapeaux.lua), inséré avant `OnUnitFlagClick` : il
+/// tire sur la case de l'unité, sinon il appelle `OnUnitFlagClick`. Le clic droit ne change pas.
+///
+/// Travaille sur les octets : le fichier du jeu n'est pas en UTF-8 (celui de BSM l'est).
+pub fn patch_unit_flags(src: &[u8]) -> Result<Vec<u8>, String> {
+    const CLICK: &[u8] = b"RegisterCallback( Mouse.eLClick, OnUnitFlagClick )";
+    const NEW_CLICK: &[u8] = b"RegisterCallback( Mouse.eLClick, Civ6RolloverProxy_OnUnitFlagLClick )";
+    const HEADER: &[u8] = b"\nfunction OnUnitFlagClick(";
+    let find_from = |from: usize, pat: &[u8]| src[from..].windows(pat.len()).position(|w| w == pat).map(|i| from + i);
+    let mut clicks = Vec::new();
+    while let Some(i) = find_from(clicks.last().map_or(0, |&i: &usize| i + CLICK.len()), CLICK) {
+        clicks.push(i);
+    }
+    if clicks.len() != 2 {
+        return Err(format!("{} clics gauches branchés sur OnUnitFlagClick au lieu de 2", clicks.len()));
+    }
+    let header = find_from(0, HEADER).ok_or("OnUnitFlagClick introuvable")? + 1;
+    // (position, texte inséré, octets remplacés), dans l'ordre du fichier.
+    let mut edits = vec![(header, FLAG_BLOCK.as_bytes(), 0)];
+    edits.extend(clicks.iter().map(|&c| (c, NEW_CLICK, CLICK.len())));
+    edits.sort_by_key(|e| e.0);
+    let mut out = Vec::with_capacity(src.len() + FLAG_BLOCK.len() + 64);
+    let mut pos = 0;
+    for (at, insert, skip) in edits {
+        out.extend_from_slice(&src[pos..at]);
+        out.extend_from_slice(insert);
+        pos = at + skip;
+    }
+    out.extend_from_slice(&src[pos..]);
+    Ok(out)
+}
+
+type Fix = fn(&[u8]) -> Result<Vec<u8>, String>;
+
+/// Corrections appliquées dès que l'accroche Lua est posée : fichier, correction, journal.
+const FIXES: [(&str, Fix, &str); 2] = [
+    ("CityPanel.lua", patch_city_panel, "owningPlayerID corrigé"),
+    ("UnitFlagManager.lua", patch_unit_flags, "clic sur un drapeau en visée d'une ville ou d'un quartier"),
+];
+
 /// Les cadres que les calques de ui_boutons.xml reproduisent : sans eux, les boutons déplacés ne
 /// seraient plus à leur place, et on ne patche rien.
 const FRAMES: [&str; 6] = [
@@ -160,6 +231,25 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
     let chunk = CStr::from_ptr(name).to_string_lossy();
     if JOURNAL.load(Ordering::Relaxed) {
         log(&format!("ui : script {chunk} ({size} octets)"));
+    }
+    for (file, patch, what) in FIXES {
+        if !is_file(&chunk, file) {
+            continue;
+        }
+        return match patch(std::slice::from_raw_parts(buf, size)) {
+            Ok(text) => {
+                let r = real(l, text.as_ptr(), text.len(), name);
+                log(&format!(
+                    "ui : {chunk} : {what}, compilation {}",
+                    if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }
+                ));
+                r
+            }
+            Err(e) => {
+                log(&format!("ui : {chunk} laissé tel quel : {e}"));
+                real(l, buf, size, name)
+            }
+        };
     }
     if !is_file(&chunk, "CityBannerManager.lua") {
         return real(l, buf, size, name);
@@ -293,6 +383,12 @@ unsafe fn text_section(module: usize) -> Option<(usize, usize)> {
     })
 }
 
+/// Le nom importé est-il `func`, tel quel ou décoré en C++ (`?func@@…`) ? L'exe importe les
+/// fonctions de HavokScript sous leur nom décoré : `?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`.
+fn is_import(name: &[u8], func: &str) -> bool {
+    name == func.as_bytes() || name.strip_prefix(b"?").and_then(|n| n.strip_prefix(func.as_bytes())).is_some_and(|n| n.starts_with(b"@@"))
+}
+
 /// Entrée de la table d'imports du module pour `dll!func`.
 unsafe fn iat_slot(module: usize, dll: &str, func: &str) -> Option<usize> {
     let nt = module + rd::<u32>(module + 0x3c) as usize;
@@ -319,7 +415,7 @@ unsafe fn iat_slot(module: usize, dll: &str, func: &str) -> Option<usize> {
                     continue;
                 }
                 let f = CStr::from_ptr((module + thunk as usize + 2) as *const c_char);
-                if f.to_bytes() == func.as_bytes() {
+                if is_import(f.to_bytes(), func) {
                     return Some(module + ft + i * 8);
                 }
             }
@@ -487,6 +583,78 @@ mod tests {
             assert_eq!(*(slot as *const usize), win::GetProcAddress(k32, b"GetModuleHandleW\0".as_ptr()) as usize);
             assert!(iat_slot(exe, "kernel32.dll", "PasUneFonction").is_none());
             assert!(iat_slot(exe, "HavokScript_FinalRelease.dll", "luaL_loadbuffer").is_none());
+        }
+    }
+
+    #[test]
+    fn city_panel_du_jeu() {
+        let Some(src) = read(format!(r"{GAME}\Base\Assets\UI\Panels\CityPanel.lua")) else { return };
+        let new = String::from_utf8(patch_city_panel(&src).unwrap()).unwrap();
+        assert!(!new.contains("owningPlayerID"));
+        assert_eq!(new.len(), src.len() - 1, "owning → owner, rien d'autre");
+        assert!(patch_city_panel(new.as_bytes()).is_err(), "pas deux fois");
+    }
+
+    fn check_flags(path: String) {
+        let Some(src) = read(path) else { return };
+        let bytes = patch_unit_flags(&src).unwrap();
+        // Rien d'autre ne change : le bloc, plus deux noms de fonction plus longs.
+        let longer = "Civ6RolloverProxy_OnUnitFlagLClick".len() - "OnUnitFlagClick".len();
+        assert_eq!(bytes.len(), src.len() + FLAG_BLOCK.len() + 2 * longer);
+        let new = String::from_utf8_lossy(&bytes);
+        assert_eq!(new.matches("RegisterCallback( Mouse.eLClick, Civ6RolloverProxy_OnUnitFlagLClick )").count(), 2);
+        assert_eq!(new.matches("RegisterCallback( Mouse.eRClick, OnUnitFlagClick )").count(), 2, "clic droit inchangé");
+        // Le gestionnaire est défini avant OnUnitFlagClick, donc avant tout branchement.
+        assert!(new.find("function Civ6RolloverProxy_OnUnitFlagLClick").unwrap() < new.find("\nfunction OnUnitFlagClick(").unwrap());
+        assert!(patch_unit_flags(&bytes).is_err(), "pas deux fois");
+    }
+
+    #[test]
+    fn drapeaux_du_jeu() {
+        check_flags(format!(r"{GAME}\Base\Assets\UI\UnitFlagManager.lua"));
+    }
+
+    #[test]
+    fn drapeaux_de_bsm() {
+        check_flags(format!(r"{BSM}\UI\Replacements\unitflagmanager.lua"));
+    }
+
+    #[test]
+    fn noms_decores() {
+        let mangled = b"?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z";
+        assert!(is_import(mangled, "luaL_loadbuffer"));
+        assert!(is_import(b"luaL_loadbuffer", "luaL_loadbuffer"));
+        assert!(!is_import(b"?luaL_loadbufferx@@YAHPEAUlua_State@@PEBD_K1@Z", "luaL_loadbuffer"));
+        assert!(!is_import(b"?luaL_loadstring@@YAHPEAUlua_State@@PEBD@Z", "luaL_loadbuffer"));
+    }
+
+    /// L'entrée luaL_loadbuffer des vrais exe, projetés comme images sans être exécutés : celle que
+    /// Ghidra montre en DX12 (`140fa54e8`).
+    #[test]
+    fn import_havokscript_des_exe() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> win::HMODULE;
+            fn FreeLibrary(module: win::HMODULE) -> i32;
+        }
+        const LOAD_LIBRARY_AS_IMAGE_RESOURCE: u32 = 0x20;
+        for exe in ["CivilizationVI_DX12.exe", "CivilizationVI.exe"] {
+            let path = format!(r"{GAME}\Base\Binaries\Win64Steam\{exe}");
+            if !std::path::Path::new(&path).exists() {
+                eprintln!("absent, test sauté : {path}");
+                continue;
+            }
+            unsafe {
+                let h = LoadLibraryExW(win::wide(&path).as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+                assert!(!h.is_null(), "{exe}");
+                // Les bits bas du handle signalent une image projetée en ressource.
+                let base = h as usize & !3;
+                let slot = iat_slot(base, "HavokScript_FinalRelease.dll", "luaL_loadbuffer").unwrap_or_else(|| panic!("{exe}"));
+                if exe == "CivilizationVI_DX12.exe" {
+                    assert_eq!(slot - base, 0xfa54e8);
+                }
+                FreeLibrary(h);
+            }
         }
     }
 

@@ -331,9 +331,31 @@ joueurs.
   (`UpdatePosition`), masquent (`UpdateVisibility`, `UpdateRangeStrike`, `UpdateWMDBanner`) ou
   libèrent (`Uninitialize`) la bannière. Il masque aussi les calques pendant la révélation d'une
   merveille, et remet chaque bouton dans sa bannière à l'arrêt du contexte.
+- **Un seul clic pour attaquer depuis une ville non sélectionnée.** C'est une faute du jeu, présente
+  aussi sans mod. Le clic sélectionne la ville puis passe en `CITY_RANGE_ATTACK`. Ensuite,
+  `OnCitySelectionChanged` (`CityPanel.lua`) doit garder ce mode si la ville peut tirer. Mais il
+  teste `CityManager.GetCity(owningPlayerID, cityID)`, alors que le paramètre s'appelle
+  `ownerPlayerID`. Le test échoue donc toujours, et l'interface repasse en `SELECTION`. Dès que
+  l'accroche Lua est posée, le proxy corrige ce nom au chargement de `CityPanel.lua`
+  (`patch_city_panel`).
+- **Tirer en cliquant sur le drapeau de la cible.** En visée d'une ville ou d'un quartier, un clic
+  sur le drapeau d'une unité étrangère ne faisait rien. Le drapeau prend le clic avant `WorldInput`,
+  et `OnUnitFlagClick` (`UnitFlagManager.lua`) ne sait faire attaquer que l'unité sélectionnée.
+  - Le proxy branche les deux clics gauches des drapeaux sur `Civ6RolloverProxy_OnUnitFlagLClick`
+    ([src/ui_drapeaux.lua](src/ui_drapeaux.lua)), inséré avant `OnUnitFlagClick` (`patch_unit_flags`).
+  - Ce gestionnaire tire sur la case de l'unité, comme un clic sur la case (`CityRangeAttack`,
+    `DistrictRangeAttack`). Si la cible n'est pas valide, il appelle `OnUnitFlagClick`.
+  - Le clic droit et le lancer de WMD (`ICBM_STRIKE`) ne changent pas.
+  - Le correctif travaille sur les octets : le fichier du jeu n'est pas en UTF-8.
+- **L'accroche Lua.** L'exe importe les fonctions HavokScript sous leur nom C++ décoré
+  (`?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`). La recherche dans la table d'imports accepte
+  donc les deux formes.
 - **Le journal.** `ui : accroches posées (…)` au chargement de la partie. Puis
   `ui : …CityBannerInstances.xml : calques ajoutés`, et
-  `ui : …CityBannerManager.lua modifié (…), compilation réussie`. `Lua.log` doit contenir
+  `ui : …CityBannerManager.lua modifié (…), compilation réussie`, et
+  `ui : …CityPanel.lua : owningPlayerID corrigé, compilation réussie`, et
+  `ui : …UnitFlagManager.lua : clic sur un drapeau en visée d'une ville ou d'un quartier, compilation réussie`.
+  `Lua.log` doit contenir
   `Civ6RolloverProxy : boutons d'attaque au-dessus des drapeaux d'unités`.
 - **Tests hors jeu** (`cargo test --release`) : les remplacements de texte sur les fichiers du jeu et
   sur ceux de BSM, le bon format du XML, l'adresse trouvée par la signature dans les deux exe, la

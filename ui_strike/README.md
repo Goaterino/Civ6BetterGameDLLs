@@ -80,18 +80,44 @@ qu'ils prennent le clic. Mise en œuvre et réglages : section « Cinquième acc
   (`GridToWorld`, plus `YOFFSET_2DVIEW` ou `ZOFFSET_3DVIEW`). Si un mod change ce calcul, le calque
   se décale.
 - **Le Lua compilé dans le jeu est HavokScript.** Le bloc n'utilise que du Lua 5.1 et ne fait que
-  passer `luac -p`. Il n'a pas encore tourné dans le jeu.
+  passer `luac -p` hors du jeu. Il tourne en jeu depuis le correctif de l'import (voir plus bas).
+
+## Essais en jeu (2026-10-30)
+
+- **Premier essai : aucun effet.** L'accroche Lua n'était pas posée : l'exe importe
+  `?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`, nom C++ décoré, et le proxy cherchait le nom
+  simple. Une fois ce point corrigé, les boutons passent au-dessus des drapeaux, ils prennent le clic
+  devant un camion de ravitaillement ou un tank, et la caméra ne recentre plus.
+- **Second clic nécessaire sur le bouton d'un centre-ville non sélectionné.** Le mode de visée
+  s'ouvre puis se referme aussitôt. La cause est une faute de `CityPanel.lua`
+  (`OnCitySelectionChanged`, ligne 629), sans rapport avec le proxy :
+  1. le clic sélectionne la ville, puis passe en `CITY_RANGE_ATTACK` ;
+  2. la sélection a changé : `CitySelectionChanged` arrive, déjà dans ce mode ;
+  3. le gestionnaire veut garder le mode si la ville peut tirer, mais teste
+     `CityManager.GetCity(owningPlayerID, cityID)`. `owningPlayerID` n'existe pas (le paramètre est
+     `ownerPlayerID`) : la ville vaut nil, le test échoue, et l'interface repasse en `SELECTION` ;
+  4. une ville déjà sélectionnée ne produit pas d'événement, d'où le second clic qui fonctionne.
+
+  Le campement (`UI.SelectDistrict`) et le silo (testé en `ICBM_STRIKE` sans cette faute) ne sont
+  pas touchés. Le proxy corrige le nom au chargement de `CityPanel.lua`. Vérifié en jeu : un seul
+  clic suffit.
+- **Un clic sur le drapeau de la cible ne tirait pas** en visée d'une ville ou d'un quartier : il
+  fallait cliquer sur la case. Une unité, elle, tire aussi en cliquant sur le drapeau de sa cible.
+  - Le bouton du drapeau prend le clic avant `WorldInput`, qui ne le voit donc pas.
+  - `OnUnitFlagClick` (`unitflagmanager.lua` de BSM, identique au jeu hors mode spectateur) ne
+    connaît pour un drapeau étranger que l'attaque par l'unité sélectionnée
+    (`UI.GetHeadSelectedUnit`). En visée d'une ville, il n'y en a pas.
+  - Le proxy branche le clic gauche des drapeaux sur un gestionnaire qui tire sur la case de l'unité,
+    exactement comme `CityRangeAttack` / `DistrictRangeAttack` : `CanStartCommand`, puis
+    `RequestCommand`, puis retour en `SELECTION`. Sinon, il appelle `OnUnitFlagClick`.
+  - Le clic droit et le WMD ne changent pas. À vérifier en jeu.
 
 ## Reste à vérifier en jeu
 
-Installer avec `-UiJournal on` pour la première partie, puis lire le journal du proxy et `Lua.log`.
-
-- Le nom de chunk passé à `luaL_loadbuffer` finit-il par `CityBannerManager.lua` ? Sinon, le
-  journal liste les noms réels.
-- Les boutons restent-ils à leur place, en 3D comme en vue stratégique, au zoom proche comme
-  lointain ? Sont-ils au-dessus des drapeaux ?
-- `UI.SelectCity(pCity, false)` ne recentre-t-il plus ? Et `UI.SelectDistrict` avec le même
-  argument ?
+- Un clic sur le drapeau d'une unité ennemie à portée, en visée d'une ville puis d'un campement,
+  tire-t-il ? Un clic sur un drapeau hors de portée, ou sur le drapeau d'une de ses propres unités,
+  se comporte-t-il comme avant ?
+- `UI.SelectDistrict` avec `false` ne recentre-t-il plus non plus (bouton du campement) ?
 - Que se passe-t-il pour le silo d'un autre joueur (bouton masqué), à la destruction d'une
   bannière, à la révélation d'une merveille, et en quittant la partie puis en en chargeant une
   autre ?
