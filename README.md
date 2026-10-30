@@ -10,6 +10,8 @@ détours dans GameCore et dans l'exe, et les analyses qui l'ont motivé. Sépar�
   [cascade d'une déclaration de guerre](rollover/cascade_guerre.md) ;
 - [nuke](nuke/README.md) : animation des WMD (trace Frida, mod artdef, accélération dans le proxy) ;
 - [ui_strike](ui_strike/README.md) : boutons d'attaque des bannières, patchés depuis le proxy ;
+- [production_turns](production_turns/README.md) : compteur de tours de production qui ignore les
+  bonus plats de gouvernement (fascisme) ;
 - [netcode](netcode/README.md) : reconnexions et boucles de désynchro (hooks Frida, empreintes), analyse dans
   [docs/netcode](docs/netcode/README.md) ;
 - [docs/gamecore_xp2](docs/gamecore_xp2/README.md) : carte des fichiers source de GameCore_XP2.
