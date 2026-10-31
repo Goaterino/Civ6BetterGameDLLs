@@ -1,0 +1,108 @@
+//! Les quelques fonctions Win32 utilisées, déclarées à la main comme dans proxy/src/win.rs.
+#![allow(non_snake_case, clippy::upper_case_acronyms)]
+
+use std::ffi::c_void;
+use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
+
+const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
+const RRF_RT_REG_SZ: u32 = 0x2;
+const SEE_MASK_NOCLOSEPROCESS: u32 = 0x40;
+const SW_HIDE: i32 = 0;
+const INFINITE: u32 = 0xFFFF_FFFF;
+
+#[repr(C)]
+struct SHELLEXECUTEINFOW {
+    cbSize: u32,
+    fMask: u32,
+    hwnd: *mut c_void,
+    lpVerb: *const u16,
+    lpFile: *const u16,
+    lpParameters: *const u16,
+    lpDirectory: *const u16,
+    nShow: i32,
+    hInstApp: *mut c_void,
+    lpIDList: *mut c_void,
+    lpClass: *const u16,
+    hkeyClass: *mut c_void,
+    dwHotKey: u32,
+    hIconOrMonitor: *mut c_void,
+    hProcess: *mut c_void,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
+    fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
+    fn CloseHandle(handle: *mut c_void) -> i32;
+    pub fn FreeConsole() -> i32;
+}
+
+#[link(name = "shell32")]
+extern "system" {
+    fn ShellExecuteExW(info: *mut SHELLEXECUTEINFOW) -> i32;
+}
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn RegGetValueW(
+        key: isize,
+        subkey: *const u16,
+        value: *const u16,
+        flags: u32,
+        kind: *mut u32,
+        data: *mut c_void,
+        size: *mut u32,
+    ) -> i32;
+}
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Dossier de Steam (`HKCU\Software\Valve\Steam\SteamPath`).
+pub fn steam_path() -> Option<PathBuf> {
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            wide("Software\\Valve\\Steam").as_ptr(),
+            wide("SteamPath").as_ptr(),
+            RRF_RT_REG_SZ,
+            null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if r != 0 || size < 2 {
+        return None;
+    }
+    let len = size as usize / 2 - 1;
+    // Steam l'écrit avec des « / ».
+    Some(PathBuf::from(String::from_utf16_lossy(&buf[..len]).replace('/', "\\")))
+}
+
+/// Lance `exe params` en administrateur (invite UAC), sans fenêtre, et attend son code de sortie.
+pub fn run_elevated(exe: &Path, params: &str) -> Result<u32, String> {
+    let verb = wide("runas");
+    let file = wide(&exe.to_string_lossy());
+    let params = wide(params);
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = params.as_ptr();
+    info.nShow = SW_HIDE;
+    if unsafe { ShellExecuteExW(&mut info) } == 0 || info.hProcess.is_null() {
+        return Err("droits d'administrateur refusés".into());
+    }
+    let mut code = 1;
+    unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        GetExitCodeProcess(info.hProcess, &mut code);
+        CloseHandle(info.hProcess);
+    }
+    Ok(code)
+}

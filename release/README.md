@@ -9,14 +9,16 @@ jamais depuis un PC : n'importe qui peut relier un binaire publié au commit qui
 |---|---|
 | `GameCore_XP2_FinalRelease.dll` | proxy de GameCore (`proxy/`), à poser dans `DLC/Expansion2/Binaries/Win64` |
 | `DatabaseDLL_FinalRelease.dll` | proxy de démarrage (`startup_proxy/`), à poser dans `Base/Binaries/Win64Steam` |
+| `BetterGameDLLs.exe` | l'installeur ([updater/](../updater/README.md)), hors manifeste : c'est lui qui le lit |
 | `manifest.json` | version, version du salon (`proxy/src/version.rs`), commit, et pour chaque fichier : dossier de destination, taille, SHA-256 |
 | `manifest.json.sig` | signature ed25519 du manifeste, en base64 |
 
 Les scripts Lua et XML sont compilés dans les DLL (`include_str!`) : aucun autre fichier à installer.
 
-L'updater lira `releases/latest/download/manifest.json` (une redirection, sans l'API GitHub ni sa
-limite de requêtes), vérifiera la signature avec [public_key.txt](public_key.txt), puis téléchargera
-chaque fichier depuis `releases/download/v<version>/` et contrôlera son SHA-256. Un proxy installé est
+L'updater lit `releases/latest/download/manifest.json` (une redirection, sans l'API GitHub ni sa
+limite de requêtes), vérifie la signature avec [public_key.txt](public_key.txt), puis télécharge
+chaque fichier depuis `releases/download/v<version>/` et contrôle son SHA-256. Ces adresses ne
+répondent que si le dépôt est public. Un proxy installé est
 à jour si son SHA-256 est celui du manifeste : les DLL n'ont pas besoin de connaître leur numéro de
 release.
 
@@ -41,7 +43,7 @@ les fichiers sont dans l'artefact du run.
 
 ## Clé de signature
 
-- Clé publique : [public_key.txt](public_key.txt), dans le dépôt ; l'updater l'embarquera.
+- Clé publique : [public_key.txt](public_key.txt), dans le dépôt ; l'updater l'embarque.
 - Clé privée : hors du dépôt (`%USERPROFILE%\.bgd\signing_key.txt`), et dans le secret GitHub
   `BGD_SIGNING_KEY` :
   ```

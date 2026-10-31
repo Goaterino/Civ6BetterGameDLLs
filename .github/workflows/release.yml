@@ -44,8 +44,10 @@ jobs:
         run: |
           (cd proxy && cargo build --release)
           (cd startup_proxy && cargo build --release)
+          (cd updater && cargo build --release)
           mkdir dist
           cp proxy/target/release/GameCore_XP2_FinalRelease.dll startup_proxy/target/release/DatabaseDLL_FinalRelease.dll dist/
+          cp updater/target/release/BetterGameDLLs.exe dist/
 
       - uses: actions/setup-python@v5
         with:

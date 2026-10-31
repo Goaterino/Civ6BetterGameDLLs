@@ -8,3 +8,4 @@ nuke/runs/
 netcode/runs/
 map_pins/runs/
 wonder_queue/runs/
+/updater/target/
