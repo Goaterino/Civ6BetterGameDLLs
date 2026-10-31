@@ -6,3 +6,4 @@ __pycache__/
 nuke/runs/
 netcode/runs/
 map_pins/runs/
+wonder_queue/runs/

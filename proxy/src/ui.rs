@@ -22,7 +22,10 @@
 //!   Les durées vont dans Lua.log (voir map_pins/README.md) ;
 //! - `ui_epingles=on|off` (on) : ajoute `ui_epingles_opti.lua` à MapPinManager.lua et
 //!   MapPinListPanel.lua. Plus de reconstruction quand aucune épingle n'a changé, une seule lecture
-//!   de GetMapPins par joueur et par reconstruction, liste fermée reconstruite à son ouverture.
+//!   de GetMapPins par joueur et par reconstruction, liste fermée reconstruite à son ouverture ;
+//! - `ui_merveilles=on|off` (on) : ajoute `ui_merveilles.lua` à ProductionHelper.lua. Une merveille
+//!   retirée de la file par un échange (wonder_queue/README.md) est remise en tête par des commandes
+//!   du jeu, rejouées à l'identique par tous les joueurs, proxy ou non.
 //!
 //! Dès que l'accroche Lua est posée, deux défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
 //! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), et un clic sur le
@@ -36,12 +39,14 @@ const LUA_BLOCK: &str = include_str!("ui_boutons.lua");
 const XML_BLOCK: &str = include_str!("ui_boutons.xml");
 const MESURE_BLOCK: &str = include_str!("ui_epingles.lua");
 const OPTI_BLOCK: &str = include_str!("ui_epingles_opti.lua");
+const MERVEILLES_BLOCK: &str = include_str!("ui_merveilles.lua");
 
 static BOUTONS: AtomicBool = AtomicBool::new(true);
 static RECENTRAGE: AtomicBool = AtomicBool::new(false);
 static JOURNAL: AtomicBool = AtomicBool::new(false);
 static MESURE: AtomicBool = AtomicBool::new(false);
 static OPTI: AtomicBool = AtomicBool::new(true);
+static MERVEILLES: AtomicBool = AtomicBool::new(true);
 /// Les calques sont définis dans le dernier CityBannerInstances.xml lu : le bloc Lua, qui s'en
 /// sert, n'est ajouté qu'à cette condition.
 static XML_PATCHED: AtomicBool = AtomicBool::new(false);
@@ -71,12 +76,17 @@ pub fn set_epingles(on: bool) {
     OPTI.store(on, Ordering::Relaxed);
 }
 
+pub fn set_merveilles(on: bool) {
+    MERVEILLES.store(on, Ordering::Relaxed);
+}
+
 fn active() -> bool {
     BOUTONS.load(Ordering::Relaxed)
         || !RECENTRAGE.load(Ordering::Relaxed)
         || JOURNAL.load(Ordering::Relaxed)
         || MESURE.load(Ordering::Relaxed)
         || OPTI.load(Ordering::Relaxed)
+        || MERVEILLES.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -307,6 +317,14 @@ pub fn patch_epingles(src: &[u8], ctx: &str, opti: bool, mesure: bool) -> Vec<u8
     out
 }
 
+/// ProductionHelper.lua suivi de `ui_merveilles.lua`.
+pub fn patch_merveilles(src: &[u8]) -> Vec<u8> {
+    let mut out = src.to_vec();
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(MERVEILLES_BLOCK.as_bytes());
+    out
+}
+
 type Fix = fn(&[u8]) -> Result<Vec<u8>, String>;
 
 /// Corrections appliquées dès que l'accroche Lua est posée : fichier, correction, journal.
@@ -378,6 +396,15 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
             _ => "mesure des épingles ajoutée",
         };
         log(&format!("ui : {chunk} : {what}, compilation {}", if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }));
+        return r;
+    }
+    if MERVEILLES.load(Ordering::Relaxed) && ctx == "productionhelper.lua" {
+        let text = patch_merveilles(std::slice::from_raw_parts(buf, size));
+        let r = real(l, text.as_ptr(), text.len(), name);
+        log(&format!(
+            "ui : {chunk} : rattrapage des merveilles ajouté, compilation {}",
+            if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }
+        ));
         return r;
     }
     for (file, patch, what) in FIXES {
@@ -618,13 +645,14 @@ pub unsafe fn on_gamecore_loaded() {
     }
     IAT_SLOT.store(slot, Ordering::Relaxed);
     log(&format!(
-        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}, mesure des épingles {}, épingles allégées {}",
+        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}, mesure des épingles {}, épingles allégées {}, merveilles {}",
         if XML_TRAMP.load(Ordering::Relaxed) != 0 { "oui" } else { "non" },
         if BOUTONS.load(Ordering::Relaxed) { "on" } else { "off" },
         if RECENTRAGE.load(Ordering::Relaxed) { "on" } else { "off" },
         if JOURNAL.load(Ordering::Relaxed) { "on" } else { "off" },
         if MESURE.load(Ordering::Relaxed) { "on" } else { "off" },
         if OPTI.load(Ordering::Relaxed) { "on" } else { "off" },
+        if MERVEILLES.load(Ordering::Relaxed) { "on" } else { "off" },
     ));
 }
 
@@ -661,6 +689,16 @@ mod tests {
         assert!(is_file(r"..\..\DLC\citybannermanager.lua", "CityBannerManager.lua"));
         assert!(!is_file("C:/x/CityBannerManager_Expansion2.lua", "CityBannerManager.lua"));
         assert!(!is_file("C:/x/MyCityBannerManager.lua", "CityBannerManager.lua"));
+    }
+
+    #[test]
+    fn merveilles_ajoutees_a_production_helper() {
+        assert_eq!(script_name(r"C:\x\Base\Assets\UI\ProductionHelper.lua"), "productionhelper.lua");
+        let out = String::from_utf8(patch_merveilles(b"x = 1")).unwrap();
+        assert!(out.starts_with("x = 1\r\n-- ====="));
+        assert!(out.ends_with(MERVEILLES_BLOCK));
+        let Some(src) = read(format!(r"{GAME}\Base\Assets\UI\ProductionHelper.lua")) else { return };
+        assert!(String::from_utf8_lossy(&src).contains("function SwapQueueItem(sourceIndex, destIndex)"));
     }
 
     #[test]

@@ -309,6 +309,7 @@ joueurs.
 | `ui_recentrage=on\|off` (`-UiRecentrage`) | off | off : plus de recentrage de la caméra au clic sur ces boutons |
 | `ui_journal=on\|off` (`-UiJournal`) | off | note chaque script Lua et chaque XML lus |
 | `ui_epingles=on\|off` (`-UiEpingles`) | on | ajoute [src/ui_epingles_opti.lua](src/ui_epingles_opti.lua) à `MapPinManager.lua` et `MapPinListPanel.lua` : pas de reconstruction quand aucune épingle n'a changé, une lecture de `GetMapPins` par joueur et par reconstruction, liste fermée reconstruite à son ouverture (voir [map_pins](../map_pins/README.md)) ; test hors jeu : `lua proxy/tests/test_ui_epingles_opti.lua` |
+| `ui_merveilles=on\|off` (`-UiMerveilles`) | on | ajoute [src/ui_merveilles.lua](src/ui_merveilles.lua) à `ProductionHelper.lua` : une merveille retirée de la file par un échange est remise en tête par des commandes du jeu (rajout, puis échanges), rejouées à l'identique chez tous les joueurs, proxy ou non (voir [wonder_queue](../wonder_queue/README.md)) ; test hors jeu : `lua proxy/tests/test_ui_merveilles.lua` |
 | `ui_mesure_epingles=on\|off` (`-UiMesureEpingles`) | off | ajoute [src/ui_epingles.lua](src/ui_epingles.lua) aux scripts reconstruits à chaque `PlayerInfoChanged` (épingles, liste des épingles, bandeau des dirigeants, DMT) : durées dans `Lua.log`, voir [map_pins](../map_pins/README.md) ; test hors jeu : `lua proxy/tests/test_ui_epingles.lua` |
 
 - **Lua.** L'entrée `luaL_loadbuffer` de la table d'imports de l'exe est remplacée : il suffit de
@@ -362,6 +363,21 @@ joueurs.
 - **Tests hors jeu** (`cargo test --release`) : les remplacements de texte sur les fichiers du jeu et
   sur ceux de BSM, le bon format du XML, l'adresse trouvée par la signature dans les deux exe, la
   lecture de la table d'imports. Le bloc Lua passe `luac -p`.
+
+## Merveille retirée de la file après deux échanges
+
+Analyse et trace : [wonder_queue/README.md](../wonder_queue/README.md). Quand une merveille déjà
+posée revient en tête de file après un échange, `1801007a0` revérifie sa case avec `18025bad0`, qui
+refuse : la merveille est retirée.
+
+- **Le correctif actif : `ui_merveilles`** (voir le tableau des réglages de l'interface). Le proxy ne
+  change aucune règle : l'interface du joueur renvoie le rajout de la merveille puis des échanges,
+  des commandes du jeu que toutes les machines rejouent à l'identique. Pas de désynchro, même face
+  à des joueurs sans proxy.
+- **Mis de côté : le correctif dans GameCore**, [wonder_queue/merveilles_gamecore.rs](../wonder_queue/merveilles_gamecore.rs),
+  qui faisait réussir le test de `180100a9a` quand la case porte encore le chantier de cette ville.
+  Il change une règle chez un seul joueur et désynchronise la partie si les autres ne l'ont pas. Il
+  n'est plus compilé ; son en-tête dit comment le rebrancher.
 
 ## Limites du prototype
 

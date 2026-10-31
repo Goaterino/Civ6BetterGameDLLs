@@ -12,6 +12,8 @@ détours dans GameCore et dans l'exe, et les analyses qui l'ont motivé. Sépar�
 - [ui_strike](ui_strike/README.md) : boutons d'attaque des bannières, patchés depuis le proxy ;
 - [production_turns](production_turns/README.md) : compteur de tours de production qui ignore les
   bonus plats de gouvernement (fascisme) ;
+- [wonder_queue](wonder_queue/README.md) : merveille retirée de la file de production après deux
+  échanges, rattrapée par l'interface du proxy sans désynchro ;
 - [map_pins](map_pins/README.md) : lag des épingles de carte en multijoueur (analyse statique) ;
 - [netcode](netcode/README.md) : reconnexions et boucles de désynchro (hooks Frida, empreintes), analyse dans
   [docs/netcode](docs/netcode/README.md) ;
