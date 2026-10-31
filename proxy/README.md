@@ -57,8 +57,8 @@ Le mode se règle dans `rollover_proxy.cfg`, à côté de la DLL, par une ligne 
 | `count` | pose les détours, ne change rien, compte et chronomètre les cascades |
 | `off` | aucun détour |
 
-Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`, `ui_*`) sont décrits
-plus bas, avec leur détour.
+Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`, `ui_*`,
+`tours_production`) sont décrits plus bas, avec leur détour.
 
 **Journal** : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier `Logs` du jeu.
 On y trouve :
@@ -363,6 +363,32 @@ joueurs.
 - **Tests hors jeu** (`cargo test --release`) : les remplacements de texte sur les fichiers du jeu et
   sur ceux de BSM, le bon format du XML, l'adresse trouvée par la signature dans les deux exe, la
   lecture de la table d'imports. Le bloc Lua passe `luac -p`.
+
+## Sixième accroche : compteur de tours de production
+
+[src/tours.rs](src/tours.rs), réglage `tours_production=on|off` (`-ToursProduction`), on par défaut.
+Analyse : [production_turns/README.md](../production_turns/README.md).
+
+- **La faute du jeu.** Le nombre de tours affiché ignore les bonus plats de gouvernement, que la
+  production réelle applique : fascisme (+50 % aux unités), autocratie (+10 % aux merveilles),
+  république marchande (+15 % aux districts). Une unité affichée à 6 tours passe ainsi à 4 restants
+  après un seul tour.
+- **Interface seulement.** Les prédicteurs de tours servent aussi à l'IA, qu'on ne touche pas : cela
+  désynchroniserait les joueurs sans proxy. Le proxy redirige seulement les quatre `call rel32` du
+  cache de l'interface (`Cache_City_BuildQueue`) :
+  - `18006b8dc` et `18006c8d3`, vers `1800fe9b0` ;
+  - `18006c6ad` et `18006c7b5`, vers `1800fe300`.
+
+  Les appels passent par un relais `jmp [rip+0]` alloué à moins de 2 Go de GameCore. Ils mènent à une
+  réécriture de ces deux répartiteurs, qui passe aux prédicteurs d'origine un bonus ou un
+  multiplicateur contenant le facteur `1 + 0,01 × bonus`.
+- **DX11 et DX12.** Tout est dans GameCore, chargé à l'identique par les deux exe.
+- **Garde-fou.** Chaque site doit être un `call` vers la fonction attendue, sinon rien n'est
+  redirigé. Les appels d'origine reviennent au déchargement du proxy.
+- **Le journal.** `tours : compteur de tours de production corrigé (4 appels du cache de
+  l'interface)`.
+- **Test hors jeu.** `check_hooks.py` vérifie la redirection des quatre appels, puis leur
+  restauration. `cargo test` vérifie la conversion du facteur en virgule fixe.
 
 ## Merveille retirée de la file après deux échanges
 

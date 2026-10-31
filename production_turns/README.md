@@ -2,8 +2,8 @@
 
 Gêne observée en partie : avec le fascisme, une unité affichée à 6 tours passe à 4 tours restants
 après le passage de tour. Le +50 % de production d'unités (`GOVERNMENTBONUS_UNIT_PRODUCTION`) est bien
-appliqué à la progression, mais pas au calcul du nombre de tours affiché. Le but, plus tard, est de
-corriger l'affichage depuis le proxy.
+appliqué à la progression, mais pas au calcul du nombre de tours affiché. Le proxy corrige
+l'affichage depuis le 30 octobre 2026 (voir plus bas).
 
 ## Côté Lua (2026-10-30)
 
@@ -74,25 +74,57 @@ aussi, un nombre de tours trop élevé. L'écart est plus faible et passe plus f
 **L'exemple du fascisme colle.** Prenons coût / taux affiché = 5,5. Le compteur affiche
 `ceil(5,5) = 6`. Le jeu ajoute 1,5 taux : il en reste 4,0, et le compteur affiche 4 (5 sans bonus).
 
-## Piste de correctif
+## Correctif dans le proxy (2026-10-30)
 
-Détourner les quatre prédicteurs `1800fe8b0`, `1800fe420`, `1800fe610` et `1800fe780` dans le proxy.
-On recalcule le taux comme eux, on le multiplie par le facteur ci-dessus avec les mêmes hachages (lus
-par `1802610b0` et `1802610f0`), puis on appelle `180605dd0`. Il faut reproduire l'ordre des
-multiplications et les troncatures `>> 8` de la fonction de progression, sinon l'affichage restera
-décalé d'un tour en bordure. Autre option : appeler l'original avec un pointeur de taux modifié.
-`1800fe8b0` reçoit déjà, en 4ᵉ argument, un bonus additif en virgule fixe (0 pour tous les appelants
-vus). Mais le facteur multiplie la somme, et ce bonus ne s'y ajoute pas.
+[proxy/src/tours.rs](../proxy/src/tours.rs), réglage `tours_production=on|off` (on par défaut).
+
+**Pourquoi on ne détourne pas les prédicteurs.** Ils servent aussi à l'IA : `1800fe8b0` est appelé
+par `1803e2aa0`, `1803fa5e0`, `1803fa8e0` et `180464600`, et `1800fe9b0` par `180552cc0`. Chaque
+joueur recalcule l'IA de son côté. Modifier ces fonctions changerait ses choix chez qui a le proxy,
+et le désynchroniserait des autres.
+
+**Ce que lit l'interface.** Le binding Lua `GetTurnsLeft` passe par `Cache_City_BuildQueue` :
+- sous verrou, `18006c880` appelle `1800fe9b0` (en `18006c8d3`), et `18006c650` / `18006c750`
+  appellent `1800fe300` (en `18006c6ad` / `18006c7b5`) ;
+- sans verrou, ils rendent `cache+0x28`. Cette valeur est remplie par `18006b860` (construction du
+  cache), qui appelle `1800fe9b0` en `18006b8dc`.
+
+**Le correctif.** Le proxy redirige ces quatre `call rel32`, et eux seuls, vers des relais posés à
+moins de 2 Go de GameCore. Les relais mènent à une réécriture des deux répartiteurs. Celle-ci appelle
+les prédicteurs d'origine en passant l'argument qu'ils offrent déjà (à 0 chez tous les appelants).
+Sa valeur est choisie pour que le taux prédit contienne le facteur `F` :
+
+| type | argument passé | effet sur le taux |
+|---|---|---|
+| unité | bonus additif `m·F >> 8 − m`, avec `m` = `queue+0x2c0` + bonus du joueur | `(m·F >> 8) · rendement >> 8`, comme `180105850` |
+| bâtiment | bonus additif sur `queue+0x2a8`, `F` augmenté du bonus des merveilles pour une merveille | même facteur que `1801049b0` |
+| district | multiplicateur final `F` | `F` appliqué en fin de chaîne |
+| projet | `F − 256` (le prédicteur multiplie par `arg + 256`) | `F` appliqué en fin de chaîne |
+
+`F` est converti du flottant en virgule fixe comme le fait le jeu : partie entière `<< 8`, fraction
+`× 256` tronquée à 8 bits. Sans bonus, `F` = 256 et le résultat est celui de l'original.
+
+**Ce n'est exact qu'aux arrondis près.** Pour les unités, le calcul est le même que celui de la
+progression. Pour les bâtiments et les districts, les prédicteurs d'origine multiplient déjà dans un
+autre ordre que la progression. Leurs troncatures `>> 8` diffèrent donc un peu, avec ou sans
+correctif.
+
+**DX11 et DX12.** Les deux exe chargent le même `GameCore_XP2_FinalRelease.dll` : le correctif ne
+dépend pas de l'exe.
+
+**Le chemin `18058e4e0`.** Il appelle `1800fe300` directement quand il a la vraie file (sinon il
+passe par le cache, qui est corrigé). Il reste non corrigé : on n'a pas établi s'il sert à
+l'interface ou aux scripts de règles.
 
 ## Reste à vérifier
 
-- Le chemin sans verrou du cache : `cache+0x28` est-il rempli par `1800fe9b0` (construction du cache
-  en `18006b060` / `18006b860`) ? Si oui, détourner les prédicteurs suffit.
-- La condition `+0x108 < 0` de `1802610f0` : anarchie, changement de gouvernement en cours ?
+- La condition `+0x108 < 0` de `1802610f0` : anarchie, changement de gouvernement en cours ? (Le
+  correctif appelle `1802610f0`, il suit donc cette condition comme la progression.)
 - Les noms des hachages : à confirmer en lisant le chargement de `GovernmentBonusNames` (référence
   `?180bba490` à `1802610f0`).
 - En jeu : unité sous fascisme, merveille sous autocratie, district sous république marchande, avec et
   sans débordement de production.
 
 Sorties Ghidra de cette analyse : `DumpAddrs.java` et `CallersOf.java` (`~/tools/ghidra-scripts`),
-lancés en headless sur `civ6xp2` en lecture seule.
+lancés en headless sur `civ6xp2` en lecture seule. Les appelants, les sites d'appel et les prologues du
+correctif ont été relevés avec REA (Ghidra 12.1.4) sur l'original, SHA-256 `324c51e9…c98c`.

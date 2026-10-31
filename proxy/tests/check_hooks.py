@@ -71,6 +71,25 @@ for name, rva, _ in SITES:
     assert h <= hook < h + 0x400000, f"{name} : le saut ne mène pas au proxy ({hook:#x})"
     print(f"{name} : site {base + rva:#x} -> détour {hook:#x} dans le proxy")
 
+# Compteur de tours (tours.rs) : appels `call rel32` du cache de l'interface, redirigés vers un relais
+# `jmp [rip+0]` posé près de GameCore, qui mène au proxy.
+CALLS = (  # site, fonction appelée d'origine (RVA)
+    (0x6B8DC, 0xFE9B0),
+    (0x6C8D3, 0xFE9B0),
+    (0x6C6AD, 0xFE300),
+    (0x6C7B5, 0xFE300),
+)
+for rva, callee in CALLS:
+    code = ctypes.string_at(base + rva, 5)
+    assert code[0] == 0xE8, f"tours {rva:#x} : pas de call ({code.hex()})"
+    stub = base + rva + 5 + struct.unpack("<i", code[1:])[0]
+    assert stub != base + callee, f"tours {rva:#x} : appel non redirigé"
+    jump = ctypes.string_at(stub, 14)
+    assert jump[:6] == b"\xff\x25\x00\x00\x00\x00", f"tours {rva:#x} : relais inattendu ({jump.hex()})"
+    hook = struct.unpack("<Q", jump[6:])[0]
+    assert h <= hook < h + 0x400000, f"tours {rva:#x} : le relais ne mène pas au proxy ({hook:#x})"
+    print(f"tours : call {base + rva:#x} -> relais {stub:#x} -> {hook:#x} dans le proxy")
+
 # Le proxy n'exporte que les noms de l'originale, plus DllMain et les deux exports de diagnostic.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from gen_exports import exports  # noqa: E402
@@ -90,4 +109,8 @@ for name, rva, prologue in SITES:
     now = ctypes.string_at(base + rva, len(prologue) // 2).hex()
     assert now == prologue, f"{name} : octets non restaurés après déchargement ({now})"
     print(f"{name} : octets d'origine restaurés après déchargement du proxy")
+for rva, callee in CALLS:
+    code = ctypes.string_at(base + rva, 5)
+    assert base + rva + 5 + struct.unpack("<i", code[1:])[0] == base + callee, f"tours {rva:#x} : appel non restauré"
+print("tours : appels d'origine restaurés après déchargement du proxy")
 print("OK")

@@ -88,3 +88,35 @@ pub unsafe fn install_at(name: &str, at: usize, prologue: &[u8], resume: usize, 
     win::FlushInstructionCache(win::GetCurrentProcess(), at as *const c_void, JMP_LEN);
     Ok(tramp as usize)
 }
+
+/// Page exécutable à moins de 2 Go de `near`, pour qu'un `call rel32` y mène.
+pub unsafe fn alloc_near(near: usize) -> Option<usize> {
+    const STEP: usize = 0x1_0000;
+    for i in 1..(0x7000_0000 / STEP) {
+        for at in [near.wrapping_sub(i * STEP), near.wrapping_add(i * STEP)] {
+            let p = win::VirtualAlloc(
+                (at & !(STEP - 1)) as *mut c_void,
+                0x1000,
+                win::MEM_COMMIT | win::MEM_RESERVE,
+                win::PAGE_EXECUTE_READWRITE,
+            );
+            if !p.is_null() {
+                return Some(p as usize);
+            }
+        }
+    }
+    None
+}
+
+pub fn rel32(site: usize, target: usize) -> Option<i32> {
+    i32::try_from(target as i64 - (site as i64 + 5)).ok()
+}
+
+pub unsafe fn write_rel32(site: usize, rel: i32) {
+    let mut old = 0u32;
+    if win::VirtualProtect((site + 1) as *mut c_void, 4, win::PAGE_EXECUTE_READWRITE, &mut old) != 0 {
+        std::ptr::write_unaligned((site + 1) as *mut i32, rel);
+        win::VirtualProtect((site + 1) as *mut c_void, 4, old, &mut old);
+        win::FlushInstructionCache(win::GetCurrentProcess(), site as *const c_void, 5);
+    }
+}
