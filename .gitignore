@@ -5,3 +5,4 @@ __pycache__/
 /rollover/captures/
 nuke/runs/
 netcode/runs/
+map_pins/runs/

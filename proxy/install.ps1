@@ -28,6 +28,12 @@ param(
     [string]$UiRecentrage = "off",
     [ValidateSet("on", "off")]
     [string]$UiJournal = "off",
+    # Mesure du coût des épingles de carte dans Lua.log (voir map_pins/README.md).
+    [ValidateSet("on", "off")]
+    [string]$UiMesureEpingles = "off",
+    # Épingles de carte : plus de reconstruction inutile à chaque PlayerInfoChanged (voir map_pins/README.md).
+    [ValidateSet("on", "off")]
+    [string]$UiEpingles = "on",
     [switch]$Uninstall,
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI"
 )
@@ -73,6 +79,6 @@ if (-not (Test-Ours $dll)) {
     Rename-Item $dll (Split-Path $orig -Leaf)
 }
 Copy-Item $built $dll -Force
-Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel", "ui_boutons=$UiBoutons", "ui_recentrage=$UiRecentrage", "ui_journal=$UiJournal"
-Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel, ui_boutons $UiBoutons, ui_recentrage $UiRecentrage, ui_journal $UiJournal) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
+Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel", "ui_boutons=$UiBoutons", "ui_recentrage=$UiRecentrage", "ui_journal=$UiJournal", "ui_mesure_epingles=$UiMesureEpingles", "ui_epingles=$UiEpingles"
+Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel, ui_boutons $UiBoutons, ui_recentrage $UiRecentrage, ui_journal $UiJournal, ui_mesure_epingles $UiMesureEpingles, ui_epingles $UiEpingles) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
 Write-Host "Journal : $env:LOCALAPPDATA\Civ6RolloverProxy\RolloverProxy.log"

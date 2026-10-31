@@ -12,6 +12,7 @@ détours dans GameCore et dans l'exe, et les analyses qui l'ont motivé. Sépar�
 - [ui_strike](ui_strike/README.md) : boutons d'attaque des bannières, patchés depuis le proxy ;
 - [production_turns](production_turns/README.md) : compteur de tours de production qui ignore les
   bonus plats de gouvernement (fascisme) ;
+- [map_pins](map_pins/README.md) : lag des épingles de carte en multijoueur (analyse statique) ;
 - [netcode](netcode/README.md) : reconnexions et boucles de désynchro (hooks Frida, empreintes), analyse dans
   [docs/netcode](docs/netcode/README.md) ;
 - [docs/gamecore_xp2](docs/gamecore_xp2/README.md) : carte des fichiers source de GameCore_XP2.

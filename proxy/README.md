@@ -57,8 +57,8 @@ Le mode se règle dans `rollover_proxy.cfg`, à côté de la DLL, par une ligne 
 | `count` | pose les détours, ne change rien, compte et chronomètre les cascades |
 | `off` | aucun détour |
 
-Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`) sont décrits plus
-bas, avec leur détour.
+Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`, `ui_*`) sont décrits
+plus bas, avec leur détour.
 
 **Journal** : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier `Logs` du jeu.
 On y trouve :
@@ -308,6 +308,8 @@ joueurs.
 | `ui_boutons=on\|off` (`-UiBoutons`) | on | boutons d'attaque (ville, campement) et de frappe nucléaire (silo) au-dessus des drapeaux d'unités ; `ConsumeMouse` sur les boutons nucléaires |
 | `ui_recentrage=on\|off` (`-UiRecentrage`) | off | off : plus de recentrage de la caméra au clic sur ces boutons |
 | `ui_journal=on\|off` (`-UiJournal`) | off | note chaque script Lua et chaque XML lus |
+| `ui_epingles=on\|off` (`-UiEpingles`) | on | ajoute [src/ui_epingles_opti.lua](src/ui_epingles_opti.lua) à `MapPinManager.lua` et `MapPinListPanel.lua` : pas de reconstruction quand aucune épingle n'a changé, une lecture de `GetMapPins` par joueur et par reconstruction, liste fermée reconstruite à son ouverture (voir [map_pins](../map_pins/README.md)) ; test hors jeu : `lua proxy/tests/test_ui_epingles_opti.lua` |
+| `ui_mesure_epingles=on\|off` (`-UiMesureEpingles`) | off | ajoute [src/ui_epingles.lua](src/ui_epingles.lua) aux scripts reconstruits à chaque `PlayerInfoChanged` (épingles, liste des épingles, bandeau des dirigeants, DMT) : durées dans `Lua.log`, voir [map_pins](../map_pins/README.md) ; test hors jeu : `lua proxy/tests/test_ui_epingles.lua` |
 
 - **Lua.** L'entrée `luaL_loadbuffer` de la table d'imports de l'exe est remplacée : il suffit de
   changer un pointeur, sans réécrire d'instruction, et cela marche en DX12 comme en DX11. Pour

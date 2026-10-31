@@ -16,7 +16,13 @@
 //!   `ui_boutons.xml`), et `ConsumeMouse` sur les boutons nucléaires ;
 //! - `ui_recentrage=on|off` (off) : off retire le recentrage de la caméra au clic sur ces boutons,
 //!   en passant `false` en second argument de `UI.SelectCity` / `UI.SelectDistrict` ;
-//! - `ui_journal=on|off` (off) : note le nom de chaque script et de chaque XML chargés.
+//! - `ui_journal=on|off` (off) : note le nom de chaque script et de chaque XML chargés ;
+//! - `ui_mesure_epingles=on|off` (off) : ajoute `ui_epingles.lua` à la fin des scripts que
+//!   recharge chaque `PlayerInfoChanged` (épingles, liste des épingles, bandeau des dirigeants, DMT).
+//!   Les durées vont dans Lua.log (voir map_pins/README.md) ;
+//! - `ui_epingles=on|off` (on) : ajoute `ui_epingles_opti.lua` à MapPinManager.lua et
+//!   MapPinListPanel.lua. Plus de reconstruction quand aucune épingle n'a changé, une seule lecture
+//!   de GetMapPins par joueur et par reconstruction, liste fermée reconstruite à son ouverture.
 //!
 //! Dès que l'accroche Lua est posée, deux défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
 //! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), et un clic sur le
@@ -28,10 +34,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const LUA_BLOCK: &str = include_str!("ui_boutons.lua");
 const XML_BLOCK: &str = include_str!("ui_boutons.xml");
+const MESURE_BLOCK: &str = include_str!("ui_epingles.lua");
+const OPTI_BLOCK: &str = include_str!("ui_epingles_opti.lua");
 
 static BOUTONS: AtomicBool = AtomicBool::new(true);
 static RECENTRAGE: AtomicBool = AtomicBool::new(false);
 static JOURNAL: AtomicBool = AtomicBool::new(false);
+static MESURE: AtomicBool = AtomicBool::new(false);
+static OPTI: AtomicBool = AtomicBool::new(true);
 /// Les calques sont définis dans le dernier CityBannerInstances.xml lu : le bloc Lua, qui s'en
 /// sert, n'est ajouté qu'à cette condition.
 static XML_PATCHED: AtomicBool = AtomicBool::new(false);
@@ -53,8 +63,20 @@ pub fn set_journal(on: bool) {
     JOURNAL.store(on, Ordering::Relaxed);
 }
 
+pub fn set_mesure_epingles(on: bool) {
+    MESURE.store(on, Ordering::Relaxed);
+}
+
+pub fn set_epingles(on: bool) {
+    OPTI.store(on, Ordering::Relaxed);
+}
+
 fn active() -> bool {
-    BOUTONS.load(Ordering::Relaxed) || !RECENTRAGE.load(Ordering::Relaxed) || JOURNAL.load(Ordering::Relaxed)
+    BOUTONS.load(Ordering::Relaxed)
+        || !RECENTRAGE.load(Ordering::Relaxed)
+        || JOURNAL.load(Ordering::Relaxed)
+        || MESURE.load(Ordering::Relaxed)
+        || OPTI.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -176,6 +198,115 @@ pub fn patch_unit_flags(src: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Nom du fichier d'un script, en minuscules.
+fn script_name(chunk: &str) -> String {
+    chunk.rsplit(['/', '\\']).next().unwrap_or("").trim_start_matches('@').to_ascii_lowercase()
+}
+
+/// Scripts que `ui_epingles_opti.lua` allège : les drapeaux des épingles et leur liste.
+const OPTIMIZED: [&str; 4] = ["mappinmanager.lua", "mappinmanager_dmt.lua", "mappinmanager_cqui.lua", "mappinlistpanel.lua"];
+
+/// Nom du script, en minuscules, s'il fait partie de ceux que mesure `ui_epingles.lua` : ceux qui
+/// reconstruisent quelque chose à chaque `PlayerInfoChanged`, et le calcul des rendements de DMT.
+fn measured(chunk: &str) -> Option<String> {
+    let name = script_name(chunk);
+    // DiplomacyRibbonSupport.lua est une bibliothèque incluse ailleurs (LeaderIcon.lua), pas le bandeau.
+    let ribbon = name == "diplomacyribbon.lua" || (name.starts_with("diplomacyribbon_") && name.ends_with(".lua"));
+    (OPTIMIZED.contains(&name.as_str()) || name == "dmt_yieldcalculator.lua" || ribbon).then_some(name)
+}
+
+/// HavokScript : `os.clock` n'y avance que par secondes entières. Le bloc de mesure lit donc
+/// `Civ6RolloverProxy_Clock()` (secondes, résolution QueryPerformanceCounter), posée dans la table
+/// globale (`LUA_GLOBALSINDEX`, -10002, celle où l'exe pose `PlayerConfiguration`) avant chaque
+/// script mesuré. La pose passe par `lua_cpcall` : si la table refuse l'écriture, l'erreur reste
+/// dans Lua (d'où `C-unwind`) et le bloc se rabat sur `os.clock`.
+const CLOCK_NAME: &[u8] = b"Civ6RolloverProxy_Clock\0";
+const LUA_GLOBALSINDEX: i32 = -10002;
+
+type LuaCFn = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
+
+struct Hks {
+    push_number: unsafe extern "C-unwind" fn(*mut c_void, f64),
+    push_closure: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, i32, *const c_char, i32),
+    set_field: unsafe extern "C-unwind" fn(*mut c_void, i32, *const c_char),
+    cpcall: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, *mut c_void) -> i32,
+    set_top: unsafe extern "C-unwind" fn(*mut c_void, i32),
+}
+
+static HKS: std::sync::OnceLock<Option<Hks>> = std::sync::OnceLock::new();
+static CLOCK_LOGGED: AtomicBool = AtomicBool::new(false);
+
+unsafe fn hks() -> Option<&'static Hks> {
+    HKS.get_or_init(|| {
+        let m = win::GetModuleHandleW(win::wide("HavokScript_FinalRelease.dll").as_ptr());
+        if m.is_null() {
+            return None;
+        }
+        let get = |name: &[u8]| {
+            let p = win::GetProcAddress(m, name.as_ptr());
+            (!p.is_null()).then_some(p)
+        };
+        Some(Hks {
+            push_number: std::mem::transmute(get(b"?lua_pushnumber@@YAXPEAUlua_State@@N@Z\0")?),
+            push_closure: std::mem::transmute(get(b"?hks_pushnamedcclosure@@YAXPEAUlua_State@@P6AH0@ZHPEBDH@Z\0")?),
+            set_field: std::mem::transmute(get(b"?lua_setfield@@YAXPEAUlua_State@@HPEBD@Z\0")?),
+            cpcall: std::mem::transmute(get(b"?lua_cpcall@@YAHPEAUlua_State@@P6AH0@ZPEAX@Z\0")?),
+            set_top: std::mem::transmute(get(b"?lua_settop@@YAXPEAUlua_State@@H@Z\0")?),
+        })
+    })
+    .as_ref()
+}
+
+unsafe extern "C-unwind" fn lua_clock(l: *mut c_void) -> i32 {
+    if let Some(h) = hks() {
+        (h.push_number)(l, win::qpc_ms(win::qpc()) / 1000.0);
+        return 1;
+    }
+    0
+}
+
+unsafe extern "C-unwind" fn install_clock(l: *mut c_void) -> i32 {
+    if let Some(h) = hks() {
+        (h.push_closure)(l, lua_clock, 0, CLOCK_NAME.as_ptr() as *const c_char, 0);
+        (h.set_field)(l, LUA_GLOBALSINDEX, CLOCK_NAME.as_ptr() as *const c_char);
+    }
+    0
+}
+
+unsafe fn publish_clock(l: *mut c_void) {
+    let Some(h) = hks() else {
+        if !CLOCK_LOGGED.swap(true, Ordering::Relaxed) {
+            log("ui : fonctions HavokScript introuvables, mesure des épingles avec os.clock (à la seconde)");
+        }
+        return;
+    };
+    let r = (h.cpcall)(l, install_clock, std::ptr::null_mut());
+    if r != 0 {
+        // lua_cpcall laisse l'erreur sur la pile.
+        (h.set_top)(l, -2);
+    }
+    if !CLOCK_LOGGED.swap(true, Ordering::Relaxed) {
+        log(&if r == 0 { "ui : horloge Civ6RolloverProxy_Clock posée".to_string() } else { format!("ui : horloge non posée ({r}), mesure avec os.clock") });
+    }
+}
+
+/// Le script suivi du bloc d'optimisation (`opti`), puis du bloc de mesure (`mesure`), chacun
+/// précédé de son contexte (`EpinglesOpti_Ctx`, `MesureEpingles_Ctx`). La mesure vient en dernier :
+/// elle enveloppe les fonctions déjà optimisées. Octets laissés tels quels : les fichiers du jeu ne
+/// sont pas tous en UTF-8.
+pub fn patch_epingles(src: &[u8], ctx: &str, opti: bool, mesure: bool) -> Vec<u8> {
+    let mut out = src.to_vec();
+    if opti {
+        out.extend_from_slice(format!("\r\nlocal EpinglesOpti_Ctx = \"{ctx}\";\r\n").as_bytes());
+        out.extend_from_slice(OPTI_BLOCK.as_bytes());
+    }
+    if mesure {
+        out.extend_from_slice(format!("\r\nlocal MesureEpingles_Ctx = \"{ctx}\";\r\n").as_bytes());
+        out.extend_from_slice(MESURE_BLOCK.as_bytes());
+    }
+    out
+}
+
 type Fix = fn(&[u8]) -> Result<Vec<u8>, String>;
 
 /// Corrections appliquées dès que l'accroche Lua est posée : fichier, correction, journal.
@@ -231,6 +362,23 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
     let chunk = CStr::from_ptr(name).to_string_lossy();
     if JOURNAL.load(Ordering::Relaxed) {
         log(&format!("ui : script {chunk} ({size} octets)"));
+    }
+    let ctx = script_name(&chunk);
+    let opti = OPTI.load(Ordering::Relaxed) && OPTIMIZED.contains(&ctx.as_str());
+    let mesure = MESURE.load(Ordering::Relaxed) && measured(&chunk).is_some();
+    if opti || mesure {
+        if mesure {
+            publish_clock(l);
+        }
+        let text = patch_epingles(std::slice::from_raw_parts(buf, size), &ctx, opti, mesure);
+        let r = real(l, text.as_ptr(), text.len(), name);
+        let what = match (opti, mesure) {
+            (true, true) => "épingles allégées et mesurées",
+            (true, false) => "épingles allégées",
+            _ => "mesure des épingles ajoutée",
+        };
+        log(&format!("ui : {chunk} : {what}, compilation {}", if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }));
+        return r;
     }
     for (file, patch, what) in FIXES {
         if !is_file(&chunk, file) {
@@ -470,11 +618,13 @@ pub unsafe fn on_gamecore_loaded() {
     }
     IAT_SLOT.store(slot, Ordering::Relaxed);
     log(&format!(
-        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}",
+        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}, mesure des épingles {}, épingles allégées {}",
         if XML_TRAMP.load(Ordering::Relaxed) != 0 { "oui" } else { "non" },
         if BOUTONS.load(Ordering::Relaxed) { "on" } else { "off" },
         if RECENTRAGE.load(Ordering::Relaxed) { "on" } else { "off" },
         if JOURNAL.load(Ordering::Relaxed) { "on" } else { "off" },
+        if MESURE.load(Ordering::Relaxed) { "on" } else { "off" },
+        if OPTI.load(Ordering::Relaxed) { "on" } else { "off" },
     ));
 }
 
@@ -511,6 +661,27 @@ mod tests {
         assert!(is_file(r"..\..\DLC\citybannermanager.lua", "CityBannerManager.lua"));
         assert!(!is_file("C:/x/CityBannerManager_Expansion2.lua", "CityBannerManager.lua"));
         assert!(!is_file("C:/x/MyCityBannerManager.lua", "CityBannerManager.lua"));
+    }
+
+    #[test]
+    fn scripts_mesures() {
+        assert_eq!(measured(r"C:\x\Base\Assets\UI\MapPinManager.lua").as_deref(), Some("mappinmanager.lua"));
+        assert_eq!(measured("ui/mappinmanager_dmt.lua").as_deref(), Some("mappinmanager_dmt.lua"));
+        assert_eq!(measured(r"..\DLC\Expansion2\UI\Replacements\DiplomacyRibbon_Expansion2.lua").as_deref(), Some("diplomacyribbon_expansion2.lua"));
+        assert_eq!(measured("@MapPinListPanel.lua").as_deref(), Some("mappinlistpanel.lua"));
+        assert!(measured("C:/x/MapPinPopup.lua").is_none());
+        assert!(measured("C:/x/DiplomacyRibbon.xml").is_none());
+        assert!(measured(r"C:\x\Base\Assets\UI\DiplomacyRibbonSupport.lua").is_none());
+        assert_eq!(measured(r"C:\x\diplomacyribbon_spec.lua").as_deref(), Some("diplomacyribbon_spec.lua"));
+        let out = patch_epingles(b"x = 1", "mappinmanager.lua", false, true);
+        assert!(out.starts_with(b"x = 1\r\nlocal MesureEpingles_Ctx = \"mappinmanager.lua\";\r\n"));
+        assert!(out.ends_with(MESURE_BLOCK.as_bytes()));
+        // Optimisation d'abord, mesure ensuite : la mesure enveloppe les fonctions optimisées.
+        let both = String::from_utf8(patch_epingles(b"x = 1", "mappinlistpanel.lua", true, true)).unwrap();
+        let (o, m) = (both.find("local EpinglesOpti_Ctx = \"mappinlistpanel.lua\";").unwrap(), both.find("local MesureEpingles_Ctx").unwrap());
+        assert!(o < m && both.ends_with(MESURE_BLOCK));
+        assert_eq!(patch_epingles(b"x = 1", "a.lua", false, false), b"x = 1");
+        assert!(!OPTIMIZED.contains(&script_name(r"C:\x\DiplomacyRibbon.lua").as_str()));
     }
 
     #[test]
