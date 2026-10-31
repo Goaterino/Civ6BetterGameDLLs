@@ -1,0 +1,79 @@
+# Release de BetterGameDLLs (voir release/README.md).
+# Un tag vX.Y.Z compile les deux proxys, signe le manifeste et crée une release en brouillon, à relire
+# puis publier à la main : l'updater ne voit que les releases publiées. Lancé à la main
+# (workflow_dispatch), il compile et signe sans créer de release ; les fichiers restent en artefact.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      # Même chaîne d'outils qu'en local : GNU, avec son éditeur de liens embarqué (startup_proxy/build.rs
+      # passe un .def à ld).
+      - name: Rust (GNU)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+
+      - name: Tests
+        run: |
+          (cd proxy && cargo test --release)
+          (cd startup_proxy && cargo test --release)
+
+      - name: Compilation
+        run: |
+          (cd proxy && cargo build --release)
+          (cd startup_proxy && cargo build --release)
+          mkdir dist
+          cp proxy/target/release/GameCore_XP2_FinalRelease.dll startup_proxy/target/release/DatabaseDLL_FinalRelease.dll dist/
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Manifeste signé
+        env:
+          BGD_SIGNING_KEY: ${{ secrets.BGD_SIGNING_KEY }}
+        run: |
+          pip install cryptography
+          v="$VERSION"; [ "$GITHUB_REF_TYPE" = tag ] || v=0.0.0
+          python release/manifest.py build --version "$v" --out dist/manifest.json dist
+          python release/manifest.py sign dist/manifest.json
+          python release/manifest.py verify dist/manifest.json
+
+      # Provenance des binaires (gh attestation verify) : réservée aux dépôts publics hors offre Enterprise.
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BetterGameDLLs-${{ env.VERSION }}
+          path: dist/
+
+      - name: Release en brouillon
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --title "BetterGameDLLs $VERSION" --generate-notes
