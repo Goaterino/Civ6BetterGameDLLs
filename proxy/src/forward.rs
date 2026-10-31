@@ -32,6 +32,11 @@ pub(crate) fn real_module() -> usize {
             return 0;
         }
         crate::STATUS.fetch_or(crate::ST_ORIGINAL, Ordering::Relaxed);
+        // Interrupteur général : l'originale sert telle quelle, comme sans proxy.
+        if !crate::ENABLED.load(Ordering::Relaxed) {
+            log("proxy désactivé (actif=off) : aucun détour posé, GameCore d'origine");
+            return h;
+        }
         coalesce::on_gamecore_loaded(h);
         crate::improvements::on_gamecore_loaded(h);
         crate::rendements::on_gamecore_loaded(h);

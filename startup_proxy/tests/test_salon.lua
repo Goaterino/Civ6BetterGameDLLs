@@ -1,0 +1,270 @@
+-- Test hors jeu de src/salon.lua :
+--   lua startup_proxy/tests/test_salon.lua
+-- Plusieurs machines dans un même salon, chacune avec sa copie des configurations de joueur, comme
+-- dans le jeu : SetValue n'écrit que sur sa machine, BroadcastPlayerInfo recopie la configuration du
+-- joueur local chez les autres et y lève PlayerInfoChanged. Une machine « sans proxy » ne charge
+-- pas le bloc. On vérifie les annonces, le verdict de l'hôte et le message du chat au lancement.
+
+local dir = arg[0]:match("^(.*)[/\\]") or ".";
+local f = assert(io.open(dir .. "/../src/salon.lua", "rb"));
+local BLOCK = f:read("a");
+f:close();
+
+local failures = 0;
+local function check(cond, what)
+	if not cond then
+		failures = failures + 1;
+		print("ÉCHEC : " .. what);
+	end
+end
+
+local function NewEvent()
+	local e = { handlers = {} };
+	e.Add = function(h) table.insert(e.handlers, h); end
+	e.Fire = function(...) for _, h in ipairs(e.handlers) do h(...); end end
+	return e;
+end
+
+-- `joueurs` : { { nom, proxy = true|false, version = "x" } ... }, l'hôte en premier (id 0).
+-- `options.lang`, `options.hotseat`, `options.valeurs` (valeurs déjà présentes, par joueur, comme
+-- après le chargement d'une sauvegarde).
+local function NewLobby(joueurs, options)
+	options = options or {};
+	local lobby = { machines = {}, chat = {}, host = 0, tokens = 0 };
+
+	for id = 0, #joueurs - 1 do
+		local m = { id = id, values = {}, events = {}, luaEvents = {} };
+		for pid = 0, #joueurs - 1 do
+			m.values[pid] = {};
+			for k, v in pairs((options.valeurs or {})[pid] or {}) do m.values[pid][k] = v; end
+		end
+		lobby.machines[id] = m;
+	end
+
+	local function Broadcast(from)
+		for _, m in pairs(lobby.machines) do
+			if m.id ~= from then
+				m.values[from] = {};
+				for k, v in pairs(lobby.machines[from].values[from]) do m.values[from][k] = v; end
+			end
+		end
+		for _, m in pairs(lobby.machines) do
+			m.events.PlayerInfoChanged.Fire(from);
+		end
+	end
+
+	for id, m in pairs(lobby.machines) do
+		local j = joueurs[id + 1];
+		local env = setmetatable({}, { __index = _G });
+		m.env = env;
+		m.events = setmetatable({}, { __index = function(t, k) local e = NewEvent(); rawset(t, k, e); return e; end });
+		m.luaEvents = setmetatable({}, { __index = function(t, k) local e = NewEvent(); rawset(t, k, e); return e; end });
+		env.Events = m.events;
+		env.LuaEvents = m.luaEvents;
+		env.ContextPtr = { IsHidden = function() return false; end };
+		env.Locale = {
+			GetCurrentLanguage = function() return { Type = options.lang or "fr_FR" }; end,
+			Lookup = function(s) return s; end,
+		};
+		env.SlotStatus = { SS_TAKEN = 1, SS_OPEN = 2 };
+		env.ChatTargetTypes = { CHATTARGET_ALL = -1 };
+		env.GameConfiguration = {
+			IsNetworkMultiplayer = function() return not options.hotseat; end,
+			IsHotseat = function() return options.hotseat == true; end,
+			IsPlayByCloud = function() return false; end,
+			GetMultiplayerPlayerIDs = function()
+				local ids = {};
+				for pid = 0, #joueurs - 1 do table.insert(ids, pid); end
+				return ids;
+			end,
+		};
+		env.PlayerConfigurations = setmetatable({}, { __index = function(_, pid)
+			if m.values[pid] == nil then return nil; end
+			return {
+				GetValue = function(_, k) return m.values[pid][k]; end,
+				SetValue = function(_, k, v)
+					assert(pid == id, "une machine n'écrit que sa propre configuration");
+					m.values[pid][k] = v;
+				end,
+				IsHuman = function() return joueurs[pid + 1].ia ~= true; end,
+				GetSlotStatus = function() return 1; end,
+				GetPlayerName = function() return joueurs[pid + 1].nom; end,
+			};
+		end });
+		env.Network = {
+			IsGameHost = function() return id == lobby.host; end,
+			GetGameHostPlayerID = function() return lobby.host; end,
+			GetLocalPlayerID = function() return id; end,
+			IsPlayerConnected = function(pid) return joueurs[pid + 1].absent ~= true; end,
+			BroadcastPlayerInfo = function() Broadcast(id); end,
+			SendChat = function(text, target, to) table.insert(lobby.chat, { from = id, text = text, target = target }); end,
+		};
+		env.StartLaunchCountdown = function() m.countdowns = (m.countdowns or 0) + 1; end
+		if j.proxy ~= false then
+			env.Civ6Proxy_Version = function() return j.version or "0.1.0"; end
+			env.Civ6Proxy_Jeton = function() lobby.tokens = lobby.tokens + 1; return "j" .. lobby.tokens; end
+			env.Civ6Proxy_Journal = function(t) m.log = (m.log or "") .. t .. "\n"; end
+			local chunk = assert(load(BLOCK, "=salon.lua", "t", env));
+			chunk();
+		end
+	end
+
+	-- Ouverture du salon : l'hôte d'abord, puis ceux qui le rejoignent.
+	function lobby.open()
+		for id = 0, #joueurs - 1 do
+			local m = lobby.machines[id];
+			local ev = (id == lobby.host) and m.luaEvents.HostGame_ShowStagingRoom or m.luaEvents.JoiningRoom_ShowStagingRoom;
+			ev.Fire();
+		end
+	end
+	function lobby.countdown()
+		for _, m in pairs(lobby.machines) do m.env.StartLaunchCountdown(); end
+	end
+	function lobby.verdict()
+		return lobby.machines[lobby.host].values[lobby.host].BGD_VERDICT;
+	end
+	-- Le drapeau du verdict, "1" ou "0" (nil sans verdict).
+	function lobby.actif()
+		local v = lobby.verdict();
+		return v and v:match("^[^:]*:([01]):");
+	end
+	return lobby;
+end
+
+-- Conclusion de chaque machine équipée au lancement, d'après son journal.
+local function Pol(lobby, id)
+	local log = lobby.machines[id].log or "";
+	local last;
+	for v in log:gmatch("lancement : correctifs POL (%S+)") do last = v; end
+	return last;
+end
+
+local function LastChat(lobby)
+	local c = lobby.chat[#lobby.chat];
+	return c and c.text or "";
+end
+
+-- 1. Tous équipés : verdict 1, message vert, une seule fois.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" }, { nom = "Zoé" } });
+	l.open();
+	check(l.actif() == "1", "tous équipés : verdict 1 (" .. tostring(l.verdict()) .. ")");
+	l.countdown();
+	check(#l.chat == 1 and l.chat[1].from == 0, "un seul message, de l'hôte");
+	check(LastChat(l):find("^%[COLOR_GREEN%]BGD %- ") and LastChat(l):find("correctifs POL actifs", 1, true), "message vert : " .. LastChat(l));
+	l.countdown();
+	check(#l.chat == 1, "pas de second message identique");
+	check(l.machines[1].countdowns == 2, "le compte à rebours d'origine est toujours lancé");
+	for id = 0, 2 do check(Pol(l, id) == "actifs", "machine " .. id .. " : POL actifs (" .. tostring(Pol(l, id)) .. ")"); end
+end
+
+-- 2. Un joueur sans proxy : verdict 0, message rouge qui le nomme.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob", proxy = false }, { nom = "Zoé" } });
+	l.open();
+	check(l.actif() == "0", "sans proxy : verdict 0");
+	l.countdown();
+	local t = LastChat(l);
+	check(t:find("^%[COLOR_RED%]BGD %- Sans BetterGameDLLs : Bob%."), "message rouge : " .. t);
+	check(t:find("Correctifs POL désactivés pour cette partie.", 1, true), "correctifs POL désactivés : " .. t);
+	check(not t:find("Zoé", 1, true), "Zoé est équipée");
+	check(#l.chat == 1, "Zoé, vue par l'hôte, n'écrit rien");
+	check(Pol(l, 0) == "désactivés" and Pol(l, 2) == "désactivés", "POL désactivés chez l'hôte et Zoé");
+end
+
+-- 3. Valeur restée d'une sauvegarde chez un joueur qui n'a plus le proxy : ancien jeton, ne compte pas.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob", proxy = false } },
+		{ valeurs = { [1] = { BGD_VERSION = "0.1.0@ancien#vieux" } } });
+	l.open();
+	check(l.actif() == "0", "valeur d'une sauvegarde : verdict 0");
+	l.countdown();
+	check(LastChat(l):find("Sans BetterGameDLLs : Bob", 1, true), "Bob compté sans proxy : " .. LastChat(l));
+end
+
+-- 4. Autre version, en anglais.
+do
+	local l = NewLobby({ { nom = "Host" }, { nom = "Bob", version = "0.0.9" } }, { lang = "en_US" });
+	l.open();
+	check(l.actif() == "0", "autre version : verdict 0");
+	l.countdown();
+	local t = LastChat(l);
+	check(t:find("BetterGameDLLs version other than 0.1.0: Bob (0.0.9).", 1, true), "version citée : " .. t);
+	check(t:find("POL fixes disabled for this game.", 1, true), "anglais : " .. t);
+end
+
+-- 5. IA et joueurs déconnectés ne comptent pas ; un client n'envoie rien au lancement.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "IA", proxy = false, ia = true }, { nom = "Parti", proxy = false, absent = true } });
+	l.open();
+	check(l.actif() == "1", "IA et absent ignorés : verdict 1");
+	l.countdown();
+	check(#l.chat == 1, "seul l'hôte écrit");
+end
+
+-- 6. Hôte sans proxy : aucun verdict ; le premier client équipé le dit. Bob (id 1) n'a pas le
+-- proxy : c'est Zoé (id 2) qui écrit, une fois.
+do
+	local l = NewLobby({ { nom = "Hôte", proxy = false }, { nom = "Bob", proxy = false }, { nom = "Zoé" }, { nom = "Léo" } });
+	l.open();
+	check(l.verdict() == nil, "hôte sans proxy : pas de verdict");
+	l.countdown();
+	local deZoe = 0;
+	for _, c in ipairs(l.chat) do
+		check(c.from ~= 0 and c.text:find("^%[COLOR_RED%]BGD %- L'hôte n'a pas BetterGameDLLs"), "message d'un client : " .. c.text);
+		if c.from == 2 then deZoe = deZoe + 1; end
+	end
+	check(deZoe == 1, "Zoé écrit une fois");
+	check(Pol(l, 2) == "désactivés" and Pol(l, 3) == "désactivés", "POL désactivés chez les clients");
+end
+
+-- 10. Verdict périmé sorti d'une sauvegarde : l'hôte avait le proxy, il ne l'a plus. Il rediffuse
+-- sa configuration, verdict « 1 » compris : les clients ne doivent pas y croire.
+do
+	local l = NewLobby({ { nom = "Hôte", proxy = false }, { nom = "Bob" }, { nom = "Zoé" } },
+		{ valeurs = {
+			[0] = { BGD_VERSION = "0.1.0@j1#j1", BGD_VERDICT = "0.1.0@j1:1:b1,z1" },
+			[1] = { BGD_VERSION = "0.1.0@j1#b1" },
+			[2] = { BGD_VERSION = "0.1.0@j1#z1" },
+		} });
+	l.open();
+	for _, m in pairs(l.machines) do m.events.PlayerInfoChanged.Fire(0); end
+	l.countdown();
+	check(Pol(l, 1) == "désactivés" and Pol(l, 2) == "désactivés", "verdict périmé ignoré : " .. tostring(Pol(l, 1)) .. ", " .. tostring(Pol(l, 2)));
+	check(#l.chat >= 1 and l.chat[1].text:find("L'hôte n'a pas BetterGameDLLs", 1, true), "un client prévient");
+end
+
+-- 7. Hotseat : rien.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" } }, { hotseat = true });
+	l.open();
+	l.countdown();
+	check(l.verdict() == nil and #l.chat == 0, "hotseat : rien");
+end
+
+-- 8. Migration d'hôte : le nouvel hôte tire son jeton, les autres se réannoncent avec.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" }, { nom = "Zoé" } });
+	l.open();
+	l.host = 1;
+	for _, m in pairs(l.machines) do m.events.MultiplayerHostMigrated.Fire(1); end
+	local jeton = l.machines[1].values[1].BGD_VERSION:match("^.-@(.-)#");
+	check(l.machines[2].values[2].BGD_VERSION:match("^.-@(.-)#") == jeton, "Zoé reprend le jeton du nouvel hôte");
+	check(l.actif() == "1", "verdict du nouvel hôte : 1");
+end
+
+-- 9. Un joueur qui arrive plus tard : le verdict passe à 0 dès son arrivée.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob", proxy = false, absent = true } });
+	l.open();
+	check(l.actif() == "1", "avant l'arrivée : 1");
+	l.machines[0].env.Network.IsPlayerConnected = function() return true; end
+	l.machines[0].events.MultiplayerPlayerConnected.Fire(1);
+	check(l.actif() == "0", "après l'arrivée de Bob sans proxy : 0");
+end
+
+if failures > 0 then
+	print(failures .. " échec(s)");
+	os.exit(1);
+end
+print("salon.lua : tous les tests passent");

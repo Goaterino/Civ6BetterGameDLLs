@@ -3,7 +3,8 @@
 //! L'originale est renommée GameCore_XP2_FinalRelease_orig.dll ; ce proxy prend son nom, relaie ses
 //! 157 exports (`forward`) et, au premier appel, la charge puis pose les détours de `coalesce`.
 //!
-//! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, lignes `mode=coalesce|count|off`
+//! Réglage : fichier `rollover_proxy.cfg` à côté de la DLL, lignes `actif=on|off` (interrupteur
+//! général, on par défaut), `mode=coalesce|count|off`
 //! (coalesce par défaut), `portee=cascade|message` (cascade par défaut),
 //! `ameliorations=off|count|verify|fast|quiet` et `rendements=off|count|verify|fast|quiet` (off par
 //! défaut), `wmd_accel=<facteur>|off` (20 par défaut, voir `wmd`), `ui_boutons`, `ui_recentrage` et
@@ -25,9 +26,13 @@ mod wmd;
 
 use std::ffi::c_void;
 use std::io::Write;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 pub(crate) static SELF_MODULE: AtomicUsize = AtomicUsize::new(0);
+
+/// Interrupteur général (`actif=on|off`, on par défaut) : off, le proxy charge l'originale et relaie
+/// ses exports sans poser aucun détour, sans qu'il faille le désinstaller.
+pub(crate) static ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Étapes franchies, pour les tests : voir `RolloverProxyStatus`.
 pub(crate) static STATUS: AtomicU32 = AtomicU32::new(0);
@@ -75,6 +80,9 @@ pub(crate) fn read_config() {
         return;
     };
     for line in text.lines() {
+        if let Some(v) = line.trim().strip_prefix("actif=") {
+            ENABLED.store(v.trim() != "off", Ordering::Relaxed);
+        }
         if let Some(v) = line.trim().strip_prefix("mode=") {
             coalesce::set_mode(match v.trim() {
                 "off" => coalesce::Mode::Off,

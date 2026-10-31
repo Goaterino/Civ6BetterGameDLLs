@@ -175,13 +175,13 @@ fn write_config(changes: &str) -> Result<(), String> {
 /// HavokScript n'exporte ni `lua_pushlstring` ni `lua_pushboolean` : les chaînes passent par
 /// `lua_pushfstring("%s")`, les booléens par `lua_pushinteger`.
 const LUA_GLOBALSINDEX: i32 = -10002;
-type LuaCFn = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
+pub(crate) type LuaCFn = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
 
-struct Hks {
+pub(crate) struct Hks {
     push_fstring: unsafe extern "C-unwind" fn(*mut c_void, *const c_char, ...) -> *const c_char,
     push_integer: unsafe extern "C-unwind" fn(*mut c_void, i32),
     push_nil: unsafe extern "C-unwind" fn(*mut c_void),
-    to_lstring: unsafe extern "C-unwind" fn(*mut c_void, i32, *mut usize) -> *const c_char,
+    pub(crate) to_lstring: unsafe extern "C-unwind" fn(*mut c_void, i32, *mut usize) -> *const c_char,
     push_closure: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, i32, *const c_char, i32),
     set_field: unsafe extern "C-unwind" fn(*mut c_void, i32, *const c_char),
     cpcall: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, *mut c_void) -> i32,
@@ -190,7 +190,7 @@ struct Hks {
 
 static HKS: std::sync::OnceLock<Option<Hks>> = std::sync::OnceLock::new();
 
-unsafe fn hks() -> Option<&'static Hks> {
+pub(crate) unsafe fn hks() -> Option<&'static Hks> {
     HKS.get_or_init(|| {
         let m = win::GetModuleHandleW(win::wide("HavokScript_FinalRelease.dll").as_ptr());
         if m.is_null() {
@@ -214,7 +214,7 @@ unsafe fn hks() -> Option<&'static Hks> {
     .as_ref()
 }
 
-unsafe fn push_str(h: &Hks, l: *mut c_void, s: &str) {
+pub(crate) unsafe fn push_str(h: &Hks, l: *mut c_void, s: &str) {
     let c = std::ffi::CString::new(s.replace('\0', "")).unwrap_or_default();
     (h.push_fstring)(l, b"%s\0".as_ptr() as *const c_char, c.as_ptr());
 }
@@ -264,12 +264,20 @@ unsafe extern "C-unwind" fn lua_write(l: *mut c_void) -> i32 {
     }
 }
 
-const READ_NAME: &[u8] = b"Civ6Proxy_LireReglages\0";
-const WRITE_NAME: &[u8] = b"Civ6Proxy_EcrireReglages\0";
+/// Fonctions natives d'un contexte : la fonction et son nom global, terminé par un zéro.
+pub(crate) type Natives = &'static [(LuaCFn, &'static [u8])];
+
+const OPTIONS_NATIVES: Natives =
+    &[(lua_read, b"Civ6Proxy_LireReglages\0"), (lua_write, b"Civ6Proxy_EcrireReglages\0")];
+
+thread_local! {
+    /// Les fonctions à poser, le temps d'un `lua_cpcall` : sa fonction ne reçoit que l'état Lua.
+    static PENDING: std::cell::Cell<Natives> = const { std::cell::Cell::new(&[]) };
+}
 
 unsafe extern "C-unwind" fn install_natives(l: *mut c_void) -> i32 {
     if let Some(h) = hks() {
-        for (f, name) in [(lua_read as LuaCFn, READ_NAME), (lua_write as LuaCFn, WRITE_NAME)] {
+        for &(f, name) in PENDING.with(|p| p.get()) {
             (h.push_closure)(l, f, 0, name.as_ptr() as *const c_char, 0);
             (h.set_field)(l, LUA_GLOBALSINDEX, name.as_ptr() as *const c_char);
         }
@@ -278,17 +286,20 @@ unsafe extern "C-unwind" fn install_natives(l: *mut c_void) -> i32 {
 }
 
 /// Pose les fonctions natives dans la table globale du contexte, par `lua_cpcall` : si la table
-/// refuse l'écriture, l'erreur reste dans Lua, et l'onglet le signale.
-unsafe fn publish_natives(l: *mut c_void) -> bool {
+/// refuse l'écriture, l'erreur reste dans Lua, et le bloc qui s'en sert le signale. `what` préfixe
+/// le journal.
+pub(crate) unsafe fn publish_natives(l: *mut c_void, natives: Natives, what: &str) -> bool {
     let Some(h) = hks() else {
-        log("options : fonctions HavokScript introuvables, onglet sans accès au fichier");
+        log(&format!("{what} : fonctions HavokScript introuvables, natives non posées"));
         return false;
     };
+    PENDING.with(|p| p.set(natives));
     let r = (h.cpcall)(l, install_natives, std::ptr::null_mut());
+    PENDING.with(|p| p.set(&[]));
     if r != 0 {
         // lua_cpcall laisse l'erreur sur la pile.
         (h.set_top)(l, -2);
-        log(&format!("options : fonctions natives non posées ({r})"));
+        log(&format!("{what} : fonctions natives non posées ({r})"));
     }
     r == 0
 }
@@ -304,14 +315,19 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
         return real(l, buf, size, name);
     }
     let chunk = CStr::from_ptr(name).to_string_lossy();
-    if script_name(&chunk) != "options.lua" {
-        return real(l, buf, size, name);
-    }
-    publish_natives(l);
-    let text = patch_options_lua(std::slice::from_raw_parts(buf, size));
+    let src = std::slice::from_raw_parts(buf, size);
+    let (text, what) = match script_name(&chunk).as_str() {
+        "options.lua" => {
+            publish_natives(l, OPTIONS_NATIVES, "options");
+            (patch_options_lua(src), "options : onglet des proxys ajouté")
+        }
+        crate::salon::SCRIPT => (crate::salon::prepare(l, src), "salon : annonce de version ajoutée"),
+        _ => return real(l, buf, size, name),
+    };
     let r = real(l, text.as_ptr(), text.len(), name);
+    let (prefix, rest) = what.split_once(" : ").unwrap_or(("", what));
     log(&format!(
-        "options : {chunk} : onglet des proxys ajouté, compilation {}",
+        "{prefix} : {chunk} : {rest}, compilation {}",
         if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }
     ));
     r

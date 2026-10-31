@@ -99,9 +99,12 @@ local function NewScreen(cfgText, installed, loaded, lang)
 		if k:match("^GetAvailable") then return function() return {}; end; end
 		return Any;
 	end });
-	env.Civ6Proxy_LireReglages = function() return cfgText, installed, m.loaded; end;
+	-- Le fichier : les lignes écrites s'ajoutent à la fin, la dernière d'une clé l'emporte.
+	m.cfg = cfgText;
+	env.Civ6Proxy_LireReglages = function() return m.cfg, installed, m.loaded; end;
 	env.Civ6Proxy_EcrireReglages = function(lines)
 		table.insert(m.written, lines);
+		m.cfg = m.cfg .. "\n" .. lines .. "\n";
 		return 1, m.loaded;
 	end;
 	-- IsInGame, Options, UserConfiguration… : Any.
@@ -150,7 +153,7 @@ do
 		if b.parent ~= C.ProxyOptionsStack then rows = -100; end
 		if b.name == "PullDownParameterInstance" then rows = rows + 1; else titles = titles + 1; end
 	end
-	Check("12 réglages et 4 titres, dans le panneau", rows == 12 and titles == 4);
+	Check("13 réglages et 5 titres, dans le panneau", rows == 13 and titles == 5);
 	Check("avertissement : redémarrage du jeu", (C.ProxyWarning.text or ""):find("redémarrage du jeu") ~= nil);
 	Check("état : proxy installé", C.ProxyStatus.text == "Proxy de GameCore installé.");
 
@@ -213,7 +216,7 @@ do
 		local row = m.Row("Attack buttons above unit flags");
 		Check(lang .. " : libellés en anglais", row ~= nil and row.PullDown.button.text == "Enabled"
 			and (rawget(row.StringName, "tooltip") or ""):find("stay clickable", 1, true) ~= nil);
-		Check(lang .. " : titres en anglais", m.built[1].inst.CategoryName.text == "Turn processing performance");
+		Check(lang .. " : titres en anglais", m.built[1].inst.CategoryName.text == "General");
 		Check(lang .. " : état et avertissement en anglais", C.ProxyStatus.text == "GameCore proxy installed."
 			and (C.ProxyWarning.text or ""):find("next game starts", 1, true) ~= nil);
 		local nuke = m.Row("Nuclear strike animation speed-up");
@@ -221,6 +224,25 @@ do
 	end
 	local fr = NewScreen("", 1, 0, "fr_CA");
 	Check("fr_CA : en français", fr.Row("Épingles de carte allégées") ~= nil);
+end
+
+do
+	-- Interrupteur général.
+	local m = NewScreen("ui_boutons=off\r\n", 1, 0);
+	local C = m.env.Controls;
+	local actif = m.Row("Proxys BetterGameDLLs");
+	local boutons = m.Row("Boutons d'attaque au-dessus des drapeaux d'unités");
+	Check("général : absent du fichier, activé", actif.PullDown.button.text == "Activé" and not actif.PullDown.disabled);
+	Check("général : autres réglages modifiables", not boutons.PullDown.disabled);
+	m.Choose(actif, "Désactivé");
+	Check("général off : autres réglages grisés, valeur gardée", boutons.PullDown.disabled
+		and boutons.PullDown.button.text == "Désactivé" and not actif.PullDown.disabled);
+	C.ConfirmButton.callbacks.LClick();
+	Check("général off : seul actif=off écrit", m.written[1] == "actif=off");
+	m.show();
+	Check("général off relu : grisés", boutons.PullDown.disabled);
+	m.Choose(actif, "Activé");
+	Check("général on : modifiables à nouveau", not boutons.PullDown.disabled);
 end
 
 do

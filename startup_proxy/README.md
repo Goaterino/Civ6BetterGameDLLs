@@ -3,7 +3,8 @@
 Le proxy de GameCore ([proxy](../proxy/README.md)) n'est chargé qu'au lancement d'une partie
 Gathering Storm. Ce second proxy est chargé au démarrage de l'exe, avant le menu principal. Il
 ajoute à l'écran d'options du jeu un onglet **BetterGameDLLs**, qui édite les réglages du proxy de
-GameCore (`rollover_proxy.cfg`).
+GameCore (`rollover_proxy.cfg`). Dans le salon multijoueur, il annonce sa version aux autres joueurs,
+et l'hôte établit si tous ont le proxy (voir [Le salon multijoueur](#le-salon-multijoueur--qui-a-le-proxy-)).
 
 ## Pourquoi DatabaseDLL
 
@@ -45,7 +46,9 @@ de compatibilité ni avec le graphisme, contrairement aux essais avec `version.d
   ([src/options_proxy_panel.xml](src/options_proxy_panel.xml)) avant `KeyBindings`.
 - **Le Lua.** [src/options_proxy.lua](src/options_proxy.lua) est ajouté à la fin d'`Options.lua`,
   pour lire `m_tabs`. Il construit une liste déroulante par réglage, avec les instances du fichier
-  (`PullDownParameterInstance`, `KeyBindingCategory` pour les titres).
+  (`PullDownParameterInstance`, `KeyBindingCategory` pour les titres). En tête, l'interrupteur
+  général `actif` : sur « Désactivé », les autres listes sont grisées, mais leurs valeurs restent
+  dans le fichier.
 - **Les fonctions natives**, posées dans la table globale du contexte avant sa compilation :
   `Civ6Proxy_LireReglages()` rend le texte du fichier, 1 si le proxy de GameCore est installé, et 1
   s'il a déjà lu le fichier ; `Civ6Proxy_EcrireReglages(lignes)` fusionne des lignes `clé=valeur`
@@ -78,6 +81,58 @@ de compatibilité ni avec le graphisme, contrairement aux essais avec `version.d
 `PROXY_REGLAGES` dans `options_proxy.lua`, ou l'inverse. Le libellé, l'aide et les choix se
 donnent en français et en anglais.
 
+## Le salon multijoueur : qui a le proxy ?
+
+[src/salon.rs](src/salon.rs) et [src/salon.lua](src/salon.lua). Certains correctifs changent la
+simulation : chaque machine recalcule la partie (lockstep), donc un joueur sans le proxy, ou d'une
+autre version, se désynchroniserait. Ce sont les **correctifs POL** (« proxy-only lobbies ») : ils
+ne s'activent que si tous les humains ont BetterGameDLLs à la même version. Les autres correctifs
+(interface, performances sans effet sur la partie) n'en dépendent pas.
+
+- **La version** est dans [proxy/src/version.rs](../proxy/src/version.rs), commune aux deux
+  proxys : l'augmenter à chaque version qui change la simulation ou cet échange. Elle n'est pas
+  réglable, et seule elle est échangée : les correctifs POL n'ont pas de réglage.
+- **L'accroche.** La même accroche `luaL_loadbuffer` que l'onglet ajoute `salon.lua` à la fin de
+  `StagingRoom.lua`, ou de son remplaçant du même nom (celui de MPH, par exemple), après avoir posé
+  `Civ6Proxy_Version()`, `Civ6Proxy_Jeton()` et `Civ6Proxy_Journal(texte)`. Le bloc ne s'appuie que
+  sur les événements du jeu et sur `StartLaunchCountdown`, présents dans les deux versions.
+- **Les jetons.** Les configurations de joueur sont enregistrées avec la partie : une sauvegarde
+  rechargée rapporte les annonces et le verdict d'une session précédente, peut-être chez des
+  joueurs qui n'ont plus le proxy. Chaque ouverture du salon, et chaque migration d'hôte, tire donc
+  un jeton pour l'hôte et un pour chaque joueur.
+- **L'annonce.** Chaque joueur écrit dans sa configuration de joueur `BGD_VERSION =
+  <version>@<jeton de l'hôte>#<son jeton>`, puis la diffuse (`Network.BroadcastPlayerInfo`, sans
+  effet sur le statut « prêt »). Une annonce qui ne porte pas le jeton actuel de l'hôte ne compte
+  pas.
+- **Le verdict** est celui de l'hôte, le même pour toutes les machines : `BGD_VERDICT =
+  <version>@<jeton de l'hôte>:<1|0>:<jetons>` dans sa configuration de joueur. 1 si tous les
+  humains connectés annoncent sa version avec son jeton ; les jetons de tous ceux dont il a reçu une
+  annonce de ce salon, quelle que soit leur version. Un client ne croit le verdict que s'il y trouve
+  son propre jeton du moment : un verdict sorti d'une sauvegarde, chez un hôte qui n'a plus le
+  proxy, ne peut pas le contenir. Les IA et les joueurs déconnectés ne comptent pas. Hôte sans
+  proxy : pas de verdict valable, donc pas de correctifs POL. Ni la configuration de partie (sa
+  diffusion remet tout le monde « pas prêt »), ni le hotseat, ni PlayByCloud (pas de salon commun)
+  ne servent.
+- **Les messages.** Au démarrage du compte à rebours de lancement, dans le chat, pour tous, une fois
+  par contenu, dans la langue de l'émetteur :
+  - l'hôte, en rouge : `BGD - Sans BetterGameDLLs : Bob. BetterGameDLLs d'une autre version que
+    0.1.0 : Zoé (0.0.9). Correctifs POL désactivés pour cette partie.` ;
+  - l'hôte, en vert : `BGD - Tous les joueurs ont BetterGameDLLs 0.1.0 : correctifs POL actifs.` ;
+  - si l'hôte n'a pas reçu notre annonce, le premier client équipé, par ordre d'identifiant, en
+    rouge : `BGD - L'hôte n'a pas BetterGameDLLs, ou pas une version compatible : correctifs POL
+    désactivés pour cette partie.` Équipé : son annonce a changé depuis l'ouverture du salon, ce
+    qu'une annonce restée d'une sauvegarde ne fait pas. Un client arrivé après l'annonce d'un autre
+    ne la voit pas changer : les deux peuvent alors écrire le même message, mais il n'en manque
+    jamais.
+- **Le journal** : `salon : bloc chargé, version …`, `salon : annonce …, verdict …`,
+  `salon : message : …`, `salon : lancement : correctifs POL actifs|désactivés` (la conclusion de
+  chaque machine), et toute erreur du bloc, qui n'est jamais propagée au salon.
+
+**Pas encore fait :** le proxy de GameCore ne lit pas encore le verdict (aucun correctif POL
+n'existe), et l'arrivée d'un joueur en cours de partie n'est pas traitée. Elle devra couper les
+correctifs POL pour tous, au même point de la simulation sur chaque machine, et l'hôte l'annoncera
+dans le chat.
+
 ## Compiler, tester, installer
 
 ```bash
@@ -92,6 +147,14 @@ cd startup_proxy && cargo build --release
 
   ```bash
   lua startup_proxy/tests/test_options_proxy.lua
+  ```
+- Le bloc du salon, sur plusieurs machines simulées qui ont chacune leur copie des configurations
+  de joueur : tous équipés, joueur sans proxy, annonce restée d'une sauvegarde, autre version, IA
+  et absents, hôte sans proxy (un client prévient), hotseat, migration d'hôte, arrivée tardive,
+  verdict périmé rediffusé par un hôte qui n'a plus le proxy.
+
+  ```bash
+  lua startup_proxy/tests/test_salon.lua
   ```
 - La DLL : elle se charge, chaque export aboutit à la même adresse que dans l'original, la ligne de
   journal est écrite. Une fois le proxy installé, l'original est `DatabaseDLL_FinalRelease_orig.dll`.

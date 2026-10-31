@@ -49,6 +49,12 @@ limité au lancement d'une partie Gathering Storm : le menu principal utilise `G
 
 ## Modes
 
+**Interrupteur général** : `actif=on|off` (`install.ps1 -Actif`, on par défaut). Avec `off`, le
+proxy reste installé, charge l'original et relaie ses exports, mais ne pose aucun détour : le jeu se
+comporte comme sans proxy (journal : `proxy désactivé (actif=off) : aucun détour posé`). Les autres
+réglages restent dans le fichier, pour la réactivation. C'est aussi le premier réglage de l'onglet
+BetterGameDLLs, qui grise alors les autres.
+
 Le mode se règle dans `rollover_proxy.cfg`, à côté de la DLL, par une ligne `mode=…` :
 
 | mode | effet |

@@ -42,6 +42,16 @@ local PROXY_CACHE = {
 -- (cargo test, startup_proxy) vérifie que les deux listes concordent. `defaut` est la valeur que
 -- prend le proxy quand la clé manque au fichier.
 local PROXY_REGLAGES = {
+	{ titre = { "Général", "General" } },
+	-- Interrupteur général : off, les autres réglages sont grisés (et gardés dans le fichier).
+	{ cle = "actif", defaut = "on", general = true,
+		nom = { "Proxys BetterGameDLLs", "BetterGameDLLs proxies" },
+		aide = {
+			"Désactive d'un coup tous les changements du proxy de GameCore, sans le désinstaller : le jeu se comporte comme sans proxy. Les autres réglages sont gardés, et cet onglet reste là pour le réactiver.",
+			"Turns off all GameCore proxy changes at once, without uninstalling it: the game behaves as without the proxy. The other settings are kept, and this tab stays available to turn it back on.",
+		},
+		choix = PROXY_ON_OFF },
+
 	{ titre = { "Performances du passage de tour", "Turn processing performance" } },
 	{ cle = "mode", defaut = "coalesce",
 		nom = { "Regroupement des mises à jour de villes", "Batched city updates" },
@@ -207,10 +217,13 @@ local function Proxy_Read()
 	return Proxy_T(PROXY_TEXTES.non_installe), warning;
 end
 
-local function Proxy_Refresh()
-	local status, warning = Proxy_Read();
-	Controls.ProxyStatus:SetText(status);
-	Controls.ProxyWarning:SetText(warning);
+-- Remplit les listes avec les valeurs du fichier et les choix en attente. Interrupteur général
+-- sur off : les autres listes sont grisées.
+local function Proxy_Populate()
+	local locked = false;
+	for _, r in ipairs(PROXY_REGLAGES) do
+		if r.general then locked = Proxy_Current(r) == "off"; end
+	end
 	for _, r in ipairs(PROXY_REGLAGES) do
 		if r.cle ~= nil then
 			local current = Proxy_Current(r);
@@ -232,11 +245,19 @@ local function Proxy_Refresh()
 					m_proxyPending[r.cle] = value;
 				end
 				Controls.ConfirmButton:SetDisabled(false);
-			end);
+				if r.general then Proxy_Populate(); end
+			end, locked and not r.general);
 		end
 	end
 	Controls.ProxyOptionsStack:CalculateSize();
 	Controls.ProxyOptionsScrollPanel:CalculateInternalSize();
+end
+
+local function Proxy_Refresh()
+	local status, warning = Proxy_Read();
+	Controls.ProxyStatus:SetText(status);
+	Controls.ProxyWarning:SetText(warning);
+	Proxy_Populate();
 end
 
 -- Enregistre les choix en attente ; vrai s'ils sont écrits et qu'ils attendent le redémarrage du

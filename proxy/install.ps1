@@ -1,11 +1,16 @@
 ﻿# Installe (ou retire avec -Uninstall) le proxy de GameCore_XP2_FinalRelease.dll.
 #   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Mode count
 #   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Ameliorations verify
+#   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Actif off   (installé, mais inactif)
 #   powershell -ExecutionPolicy Bypass -File proxy\install.ps1 -Uninstall
 # L'original est renommé GameCore_XP2_FinalRelease_orig.dll, jamais supprimé ; le proxy prend son
 # nom. -Uninstall remet l'original en place. Une vérification des fichiers par Steam ou une mise à
 # jour du jeu remet aussi l'original : il faut alors réinstaller.
 param(
+    # Interrupteur général : off, le proxy reste installé mais ne pose aucun détour (GameCore
+    # d'origine). Aussi réglable dans l'onglet BetterGameDLLs des options du jeu.
+    [ValidateSet("on", "off")]
+    [string]$Actif = "on",
     [ValidateSet("coalesce", "count", "off")]
     [string]$Mode = "coalesce",
     # Portée du regroupement des instantanés : cascade de guerres seulement, ou chaque passe de message.
@@ -87,6 +92,6 @@ if (-not (Test-Ours $dll)) {
     Rename-Item $dll (Split-Path $orig -Leaf)
 }
 Copy-Item $built $dll -Force
-Set-Content -Encoding ascii $cfg "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel", "ui_boutons=$UiBoutons", "ui_recentrage=$UiRecentrage", "ui_journal=$UiJournal", "ui_mesure_epingles=$UiMesureEpingles", "ui_epingles=$UiEpingles", "ui_merveilles=$UiMerveilles", "tours_production=$ToursProduction"
-Write-Host "Proxy installé dans $bin (mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel, ui_boutons $UiBoutons, ui_recentrage $UiRecentrage, ui_journal $UiJournal, ui_mesure_epingles $UiMesureEpingles, ui_epingles $UiEpingles, ui_merveilles $UiMerveilles, tours_production $ToursProduction) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
+Set-Content -Encoding ascii $cfg "actif=$Actif", "mode=$Mode", "portee=$Portee", "ameliorations=$Ameliorations", "rendements=$Rendements", "wmd_accel=$WmdAccel", "ui_boutons=$UiBoutons", "ui_recentrage=$UiRecentrage", "ui_journal=$UiJournal", "ui_mesure_epingles=$UiMesureEpingles", "ui_epingles=$UiEpingles", "ui_merveilles=$UiMerveilles", "tours_production=$ToursProduction"
+Write-Host "Proxy installé dans $bin (actif $Actif, mode $Mode, portée $Portee, ameliorations $Ameliorations, rendements $Rendements, wmd_accel $WmdAccel, ui_boutons $UiBoutons, ui_recentrage $UiRecentrage, ui_journal $UiJournal, ui_mesure_epingles $UiMesureEpingles, ui_epingles $UiEpingles, ui_merveilles $UiMerveilles, tours_production $ToursProduction) ; original conservé sous GameCore_XP2_FinalRelease_orig.dll."
 Write-Host "Journal : $env:LOCALAPPDATA\Civ6RolloverProxy\RolloverProxy.log"

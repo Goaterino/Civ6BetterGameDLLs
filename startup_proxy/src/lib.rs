@@ -6,7 +6,8 @@
 //! ses 5 exports sont renvoyés vers elle par le chargeur (voir build.rs).
 //!
 //! Ce proxy ajoute à l'écran d'options un onglet qui édite les réglages du proxy de GameCore
-//! (`options`). Journal commun aux deux proxys : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`.
+//! (`options`), et annonce sa version aux autres joueurs du salon multijoueur (`salon`). Journal
+//! commun aux deux proxys : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, DatabaseDLL_FinalRelease, est imposé.
 
@@ -22,6 +23,9 @@ mod patch;
 mod win;
 
 mod options;
+mod salon;
+#[path = "../../proxy/src/version.rs"]
+mod version;
 
 use std::ffi::c_void;
 use std::io::Write;
@@ -66,7 +70,7 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, _reserv
         // Sous le verrou du chargeur : seulement des appels à kernel32, déjà initialisée. Hors de
         // l'exe du jeu (tests), on ne pose rien.
         let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-        log(&format!("démarrage : proxy DatabaseDLL chargé dans {exe}"));
+        log(&format!("démarrage : proxy DatabaseDLL chargé dans {exe}, BetterGameDLLs {}", version::VERSION));
         let name = exe.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
         if name.starts_with("civilizationvi") {
             options::install();
