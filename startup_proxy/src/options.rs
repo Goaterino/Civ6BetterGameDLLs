@@ -11,9 +11,10 @@
 //!   locales (`m_tabs`). Avant de le compiler, on pose dans la table globale du contexte deux
 //!   fonctions natives : `Civ6Proxy_LireReglages()` et `Civ6Proxy_EcrireReglages(lignes)`.
 //!
-//! Les réglages ne sont lus par le proxy de GameCore qu'à son chargement : un changement prend effet
-//! au redémarrage du jeu, ce que dit l'onglet, et la confirmation affiche le message du jeu
-//! « redémarrage nécessaire ».
+//! Les réglages ne sont lus par le proxy de GameCore qu'à son chargement, au lancement de la
+//! première partie (`gamecore_config_read`). Avant, un changement prend effet à la prochaine
+//! partie ; après, au redémarrage du jeu, et la confirmation affiche alors le message du jeu
+//! « redémarrage nécessaire ». L'onglet le dit, en français si le jeu l'est, en anglais sinon.
 
 use crate::exe::{self, iat_slot, is_file, replace_buffer, write_slot, GameBuf, ReadXml};
 use crate::{log, win};
@@ -125,6 +126,26 @@ fn gamecore_dir() -> Option<std::path::PathBuf> {
     Some(exe_dir.parent()?.parent()?.parent()?.join("DLC").join("Expansion2").join("Binaries").join("Win64"))
 }
 
+/// Le proxy de GameCore est-il chargé, et a-t-il déjà lu le fichier ? Il ne le lit qu'une fois, au
+/// lancement de la première partie (`forward::real_module`), puis passe à `RolloverProxyStatus`
+/// le bit 2 (originale chargée). Avant, un changement sera lu par la prochaine partie ; après, il
+/// attend le redémarrage du jeu. L'originale seule n'a pas cet export.
+pub fn gamecore_config_read() -> bool {
+    const ST_ORIGINAL: u32 = 2;
+    unsafe {
+        let m = win::GetModuleHandleW(win::wide("GameCore_XP2_FinalRelease.dll").as_ptr());
+        if m.is_null() {
+            return false;
+        }
+        let p = win::GetProcAddress(m, b"RolloverProxyStatus\0".as_ptr());
+        if p.is_null() {
+            return false;
+        }
+        let status: extern "system" fn() -> u32 = std::mem::transmute(p);
+        status() & ST_ORIGINAL != 0
+    }
+}
+
 fn read_config() -> Result<(String, bool), String> {
     let dir = gamecore_dir().ok_or("dossier du jeu introuvable")?;
     let installed = dir.join(GAMECORE_ORIGINAL).exists();
@@ -198,24 +219,27 @@ unsafe fn push_str(h: &Hks, l: *mut c_void, s: &str) {
     (h.push_fstring)(l, b"%s\0".as_ptr() as *const c_char, c.as_ptr());
 }
 
-/// `Civ6Proxy_LireReglages()` → texte du fichier (vide s'il n'existe pas), 1 si le proxy de
-/// GameCore est installé, 0 sinon ; ou nil et le message d'erreur.
+/// `Civ6Proxy_LireReglages()` → texte du fichier (vide s'il n'existe pas), 1|0 selon que le proxy
+/// de GameCore est installé, 1|0 selon qu'il a déjà lu le fichier ; ou nil et le message d'erreur.
 unsafe extern "C-unwind" fn lua_read(l: *mut c_void) -> i32 {
     let Some(h) = hks() else { return 0 };
     match read_config() {
         Ok((text, installed)) => {
             push_str(h, l, &text);
             (h.push_integer)(l, installed as i32);
+            (h.push_integer)(l, gamecore_config_read() as i32);
+            3
         }
         Err(e) => {
             (h.push_nil)(l);
             push_str(h, l, &e);
+            2
         }
     }
-    2
 }
 
-/// `Civ6Proxy_EcrireReglages(lignes)`, lignes `clé=valeur` → 1 ; ou nil et le message d'erreur.
+/// `Civ6Proxy_EcrireReglages(lignes)`, lignes `clé=valeur` → 1 et 1|0 selon que le proxy de
+/// GameCore a déjà lu le fichier (redémarrage nécessaire) ; ou nil et le message d'erreur.
 unsafe extern "C-unwind" fn lua_write(l: *mut c_void) -> i32 {
     let Some(h) = hks() else { return 0 };
     let mut len = 0usize;
@@ -228,7 +252,8 @@ unsafe extern "C-unwind" fn lua_write(l: *mut c_void) -> i32 {
     match result {
         Ok(()) => {
             (h.push_integer)(l, 1);
-            1
+            (h.push_integer)(l, gamecore_config_read() as i32);
+            2
         }
         Err(e) => {
             log(&format!("options : {e}"));

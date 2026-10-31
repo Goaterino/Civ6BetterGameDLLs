@@ -47,14 +47,24 @@ de compatibilité ni avec le graphisme, contrairement aux essais avec `version.d
   pour lire `m_tabs`. Il construit une liste déroulante par réglage, avec les instances du fichier
   (`PullDownParameterInstance`, `KeyBindingCategory` pour les titres).
 - **Les fonctions natives**, posées dans la table globale du contexte avant sa compilation :
-  `Civ6Proxy_LireReglages()` rend le texte du fichier, et 1 si le proxy de GameCore est installé ;
-  `Civ6Proxy_EcrireReglages(lignes)` fusionne des lignes `clé=valeur` dans le fichier. Seules les
+  `Civ6Proxy_LireReglages()` rend le texte du fichier, 1 si le proxy de GameCore est installé, et 1
+  s'il a déjà lu le fichier ; `Civ6Proxy_EcrireReglages(lignes)` fusionne des lignes `clé=valeur`
+  dans le fichier, et rend aussi ce dernier indicateur. Seules les
   lignes changées sont réécrites, et les doublons d'une clé changée sont retirés : `read_config`
   garde la dernière occurrence. HavokScript n'exporte ni `lua_pushlstring` ni `lua_pushboolean` :
   les chaînes passent par `lua_pushfstring("%s")`, les booléens par `lua_pushinteger`.
-- **Confirmer** écrit le fichier puis lève `_PromptRestartApp` : le jeu affiche son propre message
-  « redémarrage nécessaire » (`LOC_OPTIONS_CHANGES_REQUIRE_APP_RESTART`). Le proxy de GameCore ne
-  lit le fichier qu'à son chargement. **Annuler** n'écrit rien ; chaque ouverture relit le fichier.
+- **Redémarrage seulement s'il le faut.** Le proxy de GameCore ne lit le fichier qu'à son
+  chargement, au lancement de la première partie. `gamecore_config_read` le demande à son export
+  `RolloverProxyStatus` (bit 2, originale chargée), si le module est chargé.
+  - Pas encore lu : **Confirmer** écrit le fichier sans autre message, et l'avertissement dit que
+    les réglages prendront effet à la prochaine partie.
+  - Déjà lu : **Confirmer** écrit le fichier puis lève `_PromptRestartApp`. Le jeu affiche son
+    propre message « redémarrage nécessaire » (`LOC_OPTIONS_CHANGES_REQUIRE_APP_RESTART`), et
+    l'avertissement le dit aussi.
+  - **Annuler** n'écrit rien. Chaque ouverture relit le fichier et met l'avertissement à jour.
+- **Langue.** Textes en français si la langue du jeu (`Locale.GetCurrentLanguage().Type`)
+  commence par `fr`, en anglais pour toutes les autres. Chaque texte de `options_proxy.lua` est une
+  paire `{ français, anglais }`.
 - **Un mod qui remplace `Options.xml`** : sans le bouton et le panneau, le bloc Lua ne fait rien.
 - **Coexistence avec le proxy de GameCore.** L'accroche Lua s'enchaîne d'elle-même : il lit notre
   accroche comme fonction d'origine. Pour la lecture XML, il trouve notre `jmp [rip+0]` au lieu du
@@ -65,7 +75,8 @@ de compatibilité ni avec le graphisme, contrairement aux essais avec `version.d
 
 **Toute nouvelle fonctionnalité des proxys doit avoir son réglage dans cet onglet.** Le test
 `cles_communes_avec_le_proxy` échoue si une clé lue par `read_config` (proxy/src/lib.rs) manque à
-`PROXY_REGLAGES` dans `options_proxy.lua`, ou l'inverse.
+`PROXY_REGLAGES` dans `options_proxy.lua`, ou l'inverse. Le libellé, l'aide et les choix se
+donnent en français et en anglais.
 
 ## Compiler, tester, installer
 

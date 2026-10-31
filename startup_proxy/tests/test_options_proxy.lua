@@ -41,6 +41,7 @@ local function NewControl()
 		if k == "SetHide" then return function(self, h) self.hidden = h; end; end
 		if k == "IsHidden" then return function(self) return self.hidden; end; end
 		if k == "SetText" or k == "LocalizeAndSetText" then return function(self, t) self.text = t; end; end
+		if k == "SetToolTipString" then return function(self, t) self.tooltip = t; end; end
 		if k == "SetDisabled" then return function(self, d) self.disabled = d; end; end
 		if k == "RegisterCallback" then return function(self, ev, f) self.callbacks[ev] = f; end; end
 		if k == "RegisterSelectionCallback" then return function(self, f) self.selection = f; end; end
@@ -59,8 +60,10 @@ local function NewControl()
 	end });
 end
 
-local function NewScreen(cfgText, installed)
-	local m = { written = {}, popupTexts = {}, built = {} };
+-- `loaded` : le proxy de GameCore a déjà lu le fichier (une partie a été lancée) ; `lang` : langue
+-- du jeu (fr_FR par défaut).
+local function NewScreen(cfgText, installed, loaded, lang)
+	local m = { written = {}, popupTexts = {}, built = {}, loaded = loaded };
 	local env = setmetatable({}, { __index = function(_, k) if _G[k] ~= nil then return _G[k]; end return Any; end });
 	env.include = function() end;
 	env.Controls = setmetatable({}, { __index = function(t, k) local c = NewControl(); rawset(t, k, c); return c; end });
@@ -77,7 +80,11 @@ local function NewScreen(cfgText, installed)
 			table.insert(m.built, { name = name, inst = inst, parent = parent });
 		end,
 	}, { __index = Any });
-	env.Locale = setmetatable({ Lookup = function(s) return s; end, ToUpper = function(s) return s; end }, { __index = Any });
+	env.Locale = setmetatable({
+		Lookup = function(s) return s; end,
+		ToUpper = function(s) return s; end,
+		GetCurrentLanguage = function() return { Type = lang or "fr_FR" }; end,
+	}, { __index = Any });
 	env.Mouse = { eLClick = "LClick", eMouseEnter = "Enter" };
 	env.PopupDialog = { new = function()
 		return setmetatable({
@@ -92,10 +99,10 @@ local function NewScreen(cfgText, installed)
 		if k:match("^GetAvailable") then return function() return {}; end; end
 		return Any;
 	end });
-	env.Civ6Proxy_LireReglages = function() return cfgText, installed; end;
+	env.Civ6Proxy_LireReglages = function() return cfgText, installed, m.loaded; end;
 	env.Civ6Proxy_EcrireReglages = function(lines)
 		table.insert(m.written, lines);
-		return 1;
+		return 1, m.loaded;
 	end;
 	-- IsInGame, Options, UserConfiguration… : Any.
 	local f = assert(load(OPTIONS .. "\r\n" .. BLOCK, "Options.lua", "t", env));
@@ -106,6 +113,13 @@ local function NewScreen(cfgText, installed)
 		for _, b in ipairs(m.built) do
 			if b.inst.StringName and b.inst.StringName.text == name then return b.inst; end
 		end
+	end
+	-- Le message de redémarrage du jeu a-t-il été affiché ?
+	function m.RestartShown()
+		for _, t in ipairs(m.popupTexts) do
+			if t == "LOC_OPTIONS_CHANGES_REQUIRE_APP_RESTART" then return true; end
+		end
+		return false;
 	end
 	-- Ce que fait le jeu quand on choisit l'entrée `label` d'une liste.
 	function m.Choose(row, label)
@@ -127,7 +141,8 @@ local function Check(name, ok)
 end
 
 do
-	local m = NewScreen("mode=coalesce\r\nui_boutons=on\r\nwmd_accel=7\r\n", 1);
+	-- Une partie a déjà été lancée : le proxy de GameCore a lu le fichier.
+	local m = NewScreen("mode=coalesce\r\nui_boutons=on\r\nwmd_accel=7\r\n", 1, 1);
 	local C = m.env.Controls;
 	Check("onglet visible", C.ProxyTab.hidden == false and C.ProxyTab.callbacks.LClick ~= nil);
 	local rows, titles = 0, 0;
@@ -136,7 +151,7 @@ do
 		if b.name == "PullDownParameterInstance" then rows = rows + 1; else titles = titles + 1; end
 	end
 	Check("12 réglages et 4 titres, dans le panneau", rows == 12 and titles == 4);
-	Check("avertissement de redémarrage", (C.ProxyWarning.text or ""):find("redémarrage") ~= nil);
+	Check("avertissement : redémarrage du jeu", (C.ProxyWarning.text or ""):find("redémarrage du jeu") ~= nil);
 	Check("état : proxy installé", C.ProxyStatus.text == "Proxy de GameCore installé.");
 
 	local boutons = m.Row("Boutons d'attaque au-dessus des drapeaux d'unités");
@@ -161,11 +176,7 @@ do
 	local w = m.written[1] or "";
 	Check("écrit à la confirmation", #m.written == 1 and w:find("ui_boutons=off", 1, true) and w:find("ameliorations=quiet", 1, true));
 	Check("redémarrage demandé", m.env._PromptRestartApp == true);
-	local restart = false;
-	for _, t in ipairs(m.popupTexts) do
-		if t == "LOC_OPTIONS_CHANGES_REQUIRE_APP_RESTART" then restart = true; end
-	end
-	Check("message de redémarrage du jeu", restart);
+	Check("message de redémarrage du jeu", m.RestartShown());
 
 	-- Réouverture : choix en attente abandonnés, fichier relu.
 	m.Choose(boutons, "Activé");
@@ -175,8 +186,41 @@ do
 end
 
 do
-	local m = NewScreen("", 0);
+	local m = NewScreen("", 0, 0);
 	Check("état : proxy non installé", (m.env.Controls.ProxyStatus.text or ""):find("non installé") ~= nil);
+end
+
+do
+	-- Aucune partie lancée depuis le démarrage : la prochaine lira le fichier, pas de redémarrage.
+	local m = NewScreen("ui_boutons=on\r\n", 1, 0);
+	local C = m.env.Controls;
+	Check("avertissement : prochaine partie", (C.ProxyWarning.text or ""):find("prochaine partie") ~= nil);
+	m.Choose(m.Row("Boutons d'attaque au-dessus des drapeaux d'unités"), "Désactivé");
+	C.ConfirmButton.callbacks.LClick();
+	Check("écrit sans partie lancée", m.written[1] == "ui_boutons=off");
+	Check("pas de message de redémarrage", not m.env._PromptRestartApp and not m.RestartShown());
+	-- Une partie lancée entre-temps : la réouverture met l'avertissement à jour.
+	m.loaded = 1;
+	m.show();
+	Check("réouverture : avertissement de redémarrage", (C.ProxyWarning.text or ""):find("redémarrage du jeu") ~= nil);
+end
+
+do
+	-- Jeu en anglais (comme toute autre langue que le français).
+	for _, lang in ipairs({ "en_US", "de_DE" }) do
+		local m = NewScreen("ui_boutons=on\r\nwmd_accel=7\r\n", 1, 0, lang);
+		local C = m.env.Controls;
+		local row = m.Row("Attack buttons above unit flags");
+		Check(lang .. " : libellés en anglais", row ~= nil and row.PullDown.button.text == "Enabled"
+			and (rawget(row.StringName, "tooltip") or ""):find("stay clickable", 1, true) ~= nil);
+		Check(lang .. " : titres en anglais", m.built[1].inst.CategoryName.text == "Turn processing performance");
+		Check(lang .. " : état et avertissement en anglais", C.ProxyStatus.text == "GameCore proxy installed."
+			and (C.ProxyWarning.text or ""):find("next game starts", 1, true) ~= nil);
+		local nuke = m.Row("Nuclear strike animation speed-up");
+		Check(lang .. " : valeur hors liste", nuke.PullDown.button.text == "7 (value from file)");
+	end
+	local fr = NewScreen("", 1, 0, "fr_CA");
+	Check("fr_CA : en français", fr.Row("Épingles de carte allégées") ~= nil);
 end
 
 do

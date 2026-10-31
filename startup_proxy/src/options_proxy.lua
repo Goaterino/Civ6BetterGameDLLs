@@ -2,86 +2,177 @@
 -- BetterGameDLLs : onglet de l'écran d'options, ajouté à la fin d'Options.lua par le
 -- proxy de démarrage (startup_proxy/src/options.rs). Il édite rollover_proxy.cfg, le fichier de
 -- réglages du proxy de GameCore, par deux fonctions natives posées par le proxy :
---   Civ6Proxy_LireReglages()          -> texte, 1|0 (proxy de GameCore installé) ; ou nil, erreur
---   Civ6Proxy_EcrireReglages(lignes)  -> 1 ; ou nil, erreur  (lignes « clé=valeur »)
--- Le proxy de GameCore ne lit ce fichier qu'à son chargement : un changement prend effet au
--- redémarrage du jeu. La confirmation lève donc _PromptRestartApp, et le jeu affiche son propre
--- message « redémarrage nécessaire ».
+--   Civ6Proxy_LireReglages()          -> texte, installé (1|0), déjà lu (1|0) ; ou nil, erreur
+--   Civ6Proxy_EcrireReglages(lignes)  -> 1, déjà lu (1|0) ; ou nil, erreur  (lignes « clé=valeur »)
+-- « Déjà lu » : le proxy de GameCore est chargé et a lu le fichier, ce qu'il ne fait qu'à son
+-- chargement, au lancement de la première partie. Alors seulement un changement attend le
+-- redémarrage du jeu : la confirmation lève _PromptRestartApp, et le jeu affiche son propre message
+-- « redémarrage nécessaire ». Sinon, la prochaine partie lira le nouveau fichier.
+-- Textes en français si le jeu l'est, en anglais pour toutes les autres langues.
 -- m_tabs, OnSelectTab, OnConfirm, OnShow, PopulateComboBox et _PromptRestartApp sont ceux
 -- d'Options.lua.
 -- ===========================================================================
 
-local PROXY_ON_OFF = { { "on", "Activé" }, { "off", "Désactivé" } };
+local PROXY_FR = false;
+do
+	local language = Locale.GetCurrentLanguage and Locale.GetCurrentLanguage();
+	local code = language and language.Type;
+	PROXY_FR = type(code) == "string" and string.sub(string.lower(code), 1, 2) == "fr";
+end
+
+-- Le texte dans la langue du jeu : { français, anglais }.
+local function Proxy_T(t)
+	if PROXY_FR then return t[1]; end
+	return t[2];
+end
+
+local PROXY_ON_OFF = {
+	{ "on", { "Activé", "Enabled" } },
+	{ "off", { "Désactivé", "Disabled" } },
+};
 local PROXY_CACHE = {
-	{ "quiet", "Activé" },
-	{ "off", "Désactivé" },
-	{ "fast", "Activé, avec journal" },
-	{ "count", "Mesure seulement (diagnostic)" },
-	{ "verify", "Vérification (diagnostic, plus lent)" },
+	{ "quiet", { "Activé", "Enabled" } },
+	{ "off", { "Désactivé", "Disabled" } },
+	{ "fast", { "Activé, avec journal", "Enabled, with log" } },
+	{ "count", { "Mesure seulement (diagnostic)", "Measure only (diagnostic)" } },
+	{ "verify", { "Vérification (diagnostic, plus lent)", "Verification (diagnostic, slower)" } },
 };
 
 -- Une entrée par réglage lu par le proxy de GameCore (read_config, proxy/src/lib.rs) : un test
 -- (cargo test, startup_proxy) vérifie que les deux listes concordent. `defaut` est la valeur que
 -- prend le proxy quand la clé manque au fichier.
 local PROXY_REGLAGES = {
-	{ titre = "Performances du passage de tour" },
+	{ titre = { "Performances du passage de tour", "Turn processing performance" } },
 	{ cle = "mode", defaut = "coalesce",
-		nom = "Regroupement des mises à jour de villes",
-		aide = "Pendant une cascade de déclarations de guerre, les données de villes et de diplomatie ne sont rafraîchies qu'une fois, à la fin : plus de 2 s gagnées sur un gros passage de tour. Ne change rien à la partie : sans risque en multijoueur, même face à des joueurs sans proxy.",
-		choix = { { "coalesce", "Activé" }, { "off", "Désactivé" }, { "count", "Mesure seulement (diagnostic)" } } },
+		nom = { "Regroupement des mises à jour de villes", "Batched city updates" },
+		aide = {
+			"Pendant une cascade de déclarations de guerre, les données de villes et de diplomatie ne sont rafraîchies qu'une fois, à la fin : plus de 2 s gagnées sur un gros passage de tour. Ne change rien à la partie : sans risque en multijoueur, même face à des joueurs sans proxy.",
+			"During a cascade of war declarations, city and diplomacy data are refreshed only once, at the end: over 2 s saved on a heavy turn. Does not change the game: safe in multiplayer, even against players without the proxy.",
+		},
+		choix = {
+			{ "coalesce", { "Activé", "Enabled" } },
+			{ "off", { "Désactivé", "Disabled" } },
+			{ "count", { "Mesure seulement (diagnostic)", "Measure only (diagnostic)" } },
+		} },
 	{ cle = "portee", defaut = "cascade",
-		nom = "Portée du regroupement",
-		aide = "« Chaque message du jeu » regroupe aussi les rafraîchissements hors guerre (gouverneurs, ressources, accords). L'interface peut alors montrer une donnée de ville en retard d'un instant.",
-		choix = { { "cascade", "Cascades de guerre seulement" }, { "message", "Chaque message du jeu" } } },
+		nom = { "Portée du regroupement", "Batching scope" },
+		aide = {
+			"« Chaque message du jeu » regroupe aussi les rafraîchissements hors guerre (gouverneurs, ressources, accords). L'interface peut alors montrer une donnée de ville en retard d'un instant.",
+			"\"Every game message\" also batches refreshes outside of wars (governors, resources, deals). The interface may then show city data a moment late.",
+		},
+		choix = {
+			{ "cascade", { "Cascades de guerre seulement", "War cascades only" } },
+			{ "message", { "Chaque message du jeu", "Every game message" } },
+		} },
 	{ cle = "ameliorations", defaut = "off",
-		nom = "Cache des améliorations constructibles",
-		aide = "Accélère la question « ce joueur peut-il construire cette amélioration ? », posée des millions de fois par passage de tour par l'IA. Même résultat que le jeu, vérifié sans aucun écart.",
+		nom = { "Cache des améliorations constructibles", "Buildable improvements cache" },
+		aide = {
+			"Accélère la question « ce joueur peut-il construire cette amélioration ? », posée des millions de fois par passage de tour par l'IA. Même résultat que le jeu, vérifié sans aucun écart.",
+			"Speeds up the question \"can this player build this improvement?\", asked millions of times per turn by the AI. Same result as the game, verified with no difference.",
+		},
 		choix = PROXY_CACHE },
 	{ cle = "rendements", defaut = "off",
-		nom = "Mémoire des rendements de cases pour l'IA",
-		aide = "Mémorise le rendement des cases pendant les calculs parallèles de l'IA, où la carte ne peut pas changer.",
+		nom = { "Mémoire des rendements de cases pour l'IA", "Tile yield memory for the AI" },
+		aide = {
+			"Mémorise le rendement des cases pendant les calculs parallèles de l'IA, où la carte ne peut pas changer.",
+			"Remembers tile yields during the AI's parallel computations, while the map cannot change.",
+		},
 		choix = PROXY_CACHE },
 
-	{ titre = "Interface" },
+	{ titre = { "Interface", "Interface" } },
 	{ cle = "wmd_accel", defaut = "20",
-		nom = "Accélération de l'animation des armes nucléaires",
-		aide = "Seulement si le combat rapide est activé (onglet Jeu). Accélère l'affichage pendant la frappe, sans effet sur la partie.",
-		choix = { { "off", "Désactivée" }, { "5", "x5" }, { "10", "x10" }, { "20", "x20" }, { "40", "x40" } } },
+		nom = { "Accélération de l'animation des armes nucléaires", "Nuclear strike animation speed-up" },
+		aide = {
+			"Seulement si le combat rapide est activé (onglet Jeu). Accélère l'affichage pendant la frappe, sans effet sur la partie.",
+			"Only with quick combat enabled (Game tab). Speeds up the display during the strike, with no effect on the game.",
+		},
+		choix = {
+			{ "off", { "Désactivée", "Disabled" } },
+			{ "5", { "x5", "x5" } },
+			{ "10", { "x10", "x10" } },
+			{ "20", { "x20", "x20" } },
+			{ "40", { "x40", "x40" } },
+		} },
 	{ cle = "ui_boutons", defaut = "on",
-		nom = "Boutons d'attaque au-dessus des drapeaux d'unités",
-		aide = "Les boutons d'attaque des villes et des campements, et ceux de frappe nucléaire des silos, passent au-dessus des drapeaux d'unités, où ils restent cliquables.",
+		nom = { "Boutons d'attaque au-dessus des drapeaux d'unités", "Attack buttons above unit flags" },
+		aide = {
+			"Les boutons d'attaque des villes et des campements, et ceux de frappe nucléaire des silos, passent au-dessus des drapeaux d'unités, où ils restent cliquables.",
+			"City and encampment attack buttons, and silo nuclear strike buttons, are drawn above unit flags, where they stay clickable.",
+		},
 		choix = PROXY_ON_OFF },
 	{ cle = "ui_recentrage", defaut = "off",
-		nom = "Recentrer la caméra au clic sur ces boutons",
-		aide = "Comportement d'origine du jeu : la caméra se recentre sur la ville au clic sur un bouton d'attaque.",
-		choix = { { "on", "Oui" }, { "off", "Non" } } },
+		nom = { "Recentrer la caméra au clic sur ces boutons", "Recenter the camera when clicking these buttons" },
+		aide = {
+			"Comportement d'origine du jeu : la caméra se recentre sur la ville au clic sur un bouton d'attaque.",
+			"Original game behavior: the camera recenters on the city when an attack button is clicked.",
+		},
+		choix = {
+			{ "on", { "Oui", "Yes" } },
+			{ "off", { "Non", "No" } },
+		} },
 	{ cle = "ui_epingles", defaut = "on",
-		nom = "Épingles de carte allégées",
-		aide = "Les épingles et leur liste ne sont plus reconstruites quand rien n'a changé : moins de ralentissements en multijoueur.",
+		nom = { "Épingles de carte allégées", "Lighter map pins" },
+		aide = {
+			"Les épingles et leur liste ne sont plus reconstruites quand rien n'a changé : moins de ralentissements en multijoueur.",
+			"Map pins and their list are no longer rebuilt when nothing changed: fewer slowdowns in multiplayer.",
+		},
 		choix = PROXY_ON_OFF },
 	{ cle = "tours_production", defaut = "on",
-		nom = "Compteur de tours de production corrigé",
-		aide = "Le nombre de tours affiché tient compte des bonus de gouvernement (fascisme, autocratie, république marchande), comme la production réelle. Affichage seulement.",
+		nom = { "Compteur de tours de production corrigé", "Fixed production turn counter" },
+		aide = {
+			"Le nombre de tours affiché tient compte des bonus de gouvernement (fascisme, autocratie, république marchande), comme la production réelle. Affichage seulement.",
+			"The displayed number of turns includes government bonuses (Fascism, Autocracy, Merchant Republic), like the actual production. Display only.",
+		},
 		choix = PROXY_ON_OFF },
 
-	{ titre = "Correctifs" },
+	{ titre = { "Correctifs", "Fixes" } },
 	{ cle = "ui_merveilles", defaut = "on",
-		nom = "Merveille gardée dans la file après un échange",
-		aide = "Une merveille retirée de la file de production par un échange y est remise, par des commandes normales du jeu : pas de désynchronisation, même face à des joueurs sans proxy.",
+		nom = { "Merveille gardée dans la file après un échange", "Wonder kept in the queue after a swap" },
+		aide = {
+			"Une merveille retirée de la file de production par un échange y est remise, par des commandes normales du jeu : pas de désynchronisation, même face à des joueurs sans proxy.",
+			"A wonder removed from the production queue by a swap is put back, through normal game commands: no desync, even against players without the proxy.",
+		},
 		choix = PROXY_ON_OFF },
 
-	{ titre = "Diagnostic" },
+	{ titre = { "Diagnostic", "Diagnostics" } },
 	{ cle = "ui_journal", defaut = "off",
-		nom = "Journal des scripts et XML chargés",
-		aide = "Note chaque fichier d'interface lu dans le journal du proxy.",
+		nom = { "Journal des scripts et XML chargés", "Log loaded scripts and XML" },
+		aide = {
+			"Note chaque fichier d'interface lu dans le journal du proxy.",
+			"Writes each interface file read to the proxy log.",
+		},
 		choix = PROXY_ON_OFF },
 	{ cle = "ui_mesure_epingles", defaut = "off",
-		nom = "Mesure du coût des épingles",
-		aide = "Écrit dans Lua.log la durée des reconstructions d'épingles et du bandeau des dirigeants.",
+		nom = { "Mesure du coût des épingles", "Measure map pin cost" },
+		aide = {
+			"Écrit dans Lua.log la durée des reconstructions d'épingles et du bandeau des dirigeants.",
+			"Writes to Lua.log how long map pin and leader ribbon rebuilds take.",
+		},
 		choix = PROXY_ON_OFF },
 };
 
-local PROXY_AVERTISSEMENT = "Ces réglages sont ceux des proxys BetterGameDLLs (rollover_proxy.cfg). Ils ne prennent effet qu'au prochain redémarrage du jeu.";
+local PROXY_TEXTES = {
+	avertissement_partie = {
+		"Ces réglages sont ceux des proxys BetterGameDLLs (rollover_proxy.cfg). Ils prendront effet au lancement de la prochaine partie.",
+		"These are the settings of the BetterGameDLLs proxies (rollover_proxy.cfg). They will take effect when the next game starts.",
+	},
+	avertissement_redemarrage = {
+		"Ces réglages sont ceux des proxys BetterGameDLLs (rollover_proxy.cfg). Une partie a déjà été lancée : ils ne prendront effet qu'au prochain redémarrage du jeu.",
+		"These are the settings of the BetterGameDLLs proxies (rollover_proxy.cfg). A game has already been started: they will only take effect after restarting the game.",
+	},
+	sans_natives = {
+		"Fonctions du proxy de démarrage absentes : les réglages ne peuvent être ni lus ni enregistrés.",
+		"Startup proxy functions missing: settings can be neither read nor saved.",
+	},
+	lecture_impossible = { "Lecture des réglages impossible : ", "Cannot read the settings: " },
+	installe = { "Proxy de GameCore installé.", "GameCore proxy installed." },
+	non_installe = {
+		"Proxy de GameCore non installé : ces réglages n'auront d'effet qu'une fois installé.",
+		"GameCore proxy not installed: these settings will only take effect once it is installed.",
+	},
+	non_enregistres = { "Réglages non enregistrés : ", "Settings not saved: " },
+	valeur_du_fichier = { " (valeur du fichier)", " (value from file)" },
+};
 
 local m_proxySaved = {};     -- valeurs du fichier
 local m_proxyPending = {};   -- choix pas encore confirmés
@@ -94,41 +185,44 @@ local function Proxy_Current(r)
 	return v;
 end
 
--- Relit le fichier ; rend le texte d'état à afficher.
+-- Relit le fichier ; rend le texte d'état et l'avertissement à afficher.
 local function Proxy_Read()
 	m_proxySaved = {};
 	if Civ6Proxy_LireReglages == nil then
-		return "Fonctions du proxy de démarrage absentes : les réglages ne peuvent être ni lus ni enregistrés.";
+		return Proxy_T(PROXY_TEXTES.sans_natives), Proxy_T(PROXY_TEXTES.avertissement_redemarrage);
 	end
-	local text, installed = Civ6Proxy_LireReglages();
+	local text, installed, loaded = Civ6Proxy_LireReglages();
 	if text == nil then
-		return "Lecture des réglages impossible : " .. tostring(installed);
+		return Proxy_T(PROXY_TEXTES.lecture_impossible) .. tostring(installed), Proxy_T(PROXY_TEXTES.avertissement_redemarrage);
 	end
 	-- Comme read_config : la dernière ligne d'une clé l'emporte.
 	for line in string.gmatch(text, "[^\r\n]+") do
 		local k, v = string.match(line, "^%s*([%w_]+)%s*=%s*(.-)%s*$");
 		if k ~= nil then m_proxySaved[k] = v; end
 	end
+	local warning = Proxy_T(loaded == 1 and PROXY_TEXTES.avertissement_redemarrage or PROXY_TEXTES.avertissement_partie);
 	if installed == 1 then
-		return "Proxy de GameCore installé.";
+		return Proxy_T(PROXY_TEXTES.installe), warning;
 	end
-	return "Proxy de GameCore non installé : ces réglages n'auront d'effet qu'une fois installé.";
+	return Proxy_T(PROXY_TEXTES.non_installe), warning;
 end
 
 local function Proxy_Refresh()
-	Controls.ProxyStatus:SetText(Proxy_Read());
+	local status, warning = Proxy_Read();
+	Controls.ProxyStatus:SetText(status);
+	Controls.ProxyWarning:SetText(warning);
 	for _, r in ipairs(PROXY_REGLAGES) do
 		if r.cle ~= nil then
 			local current = Proxy_Current(r);
 			local values = {};
 			local known = false;
 			for _, c in ipairs(r.choix) do
-				table.insert(values, { c[2], c[1] });
+				table.insert(values, { Proxy_T(c[2]), c[1] });
 				if c[1] == current then known = true; end
 			end
 			-- Une valeur écrite à la main, hors de la liste : on la montre telle quelle.
 			if not known then
-				table.insert(values, { current .. " (valeur du fichier)", current });
+				table.insert(values, { current .. Proxy_T(PROXY_TEXTES.valeur_du_fichier), current });
 			end
 			local saved = m_proxySaved[r.cle] or r.defaut;
 			PopulateComboBox(m_proxyPullDowns[r.cle], values, current, function(value)
@@ -145,7 +239,8 @@ local function Proxy_Refresh()
 	Controls.ProxyOptionsScrollPanel:CalculateInternalSize();
 end
 
--- Enregistre les choix en attente ; vrai s'il y en avait et qu'ils sont écrits.
+-- Enregistre les choix en attente ; vrai s'ils sont écrits et qu'ils attendent le redémarrage du
+-- jeu (le proxy de GameCore a déjà lu le fichier).
 local function Proxy_Save()
 	local lines = {};
 	for k, v in pairs(m_proxyPending) do
@@ -153,33 +248,32 @@ local function Proxy_Save()
 	end
 	if #lines == 0 then return false; end
 	if Civ6Proxy_EcrireReglages == nil then
-		Controls.ProxyStatus:SetText("Réglages non enregistrés : fonctions du proxy de démarrage absentes.");
+		Controls.ProxyStatus:SetText(Proxy_T(PROXY_TEXTES.non_enregistres) .. Proxy_T(PROXY_TEXTES.sans_natives));
 		return false;
 	end
-	local ok, err = Civ6Proxy_EcrireReglages(table.concat(lines, "\n"));
+	local ok, loaded = Civ6Proxy_EcrireReglages(table.concat(lines, "\n"));
 	if ok == nil then
-		Controls.ProxyStatus:SetText("Réglages non enregistrés : " .. tostring(err));
+		Controls.ProxyStatus:SetText(Proxy_T(PROXY_TEXTES.non_enregistres) .. tostring(loaded));
 		return false;
 	end
 	for k, v in pairs(m_proxyPending) do
 		m_proxySaved[k] = v;
 	end
 	m_proxyPending = {};
-	return true;
+	return loaded == 1;
 end
 
 local function Proxy_Build()
-	Controls.ProxyWarning:SetText(PROXY_AVERTISSEMENT);
 	for _, r in ipairs(PROXY_REGLAGES) do
 		local inst = {};
 		if r.titre ~= nil then
 			ContextPtr:BuildInstanceForControl("KeyBindingCategory", inst, Controls.ProxyOptionsStack);
-			inst.CategoryName:SetText(r.titre);
+			inst.CategoryName:SetText(Proxy_T(r.titre));
 		else
 			ContextPtr:BuildInstanceForControl("PullDownParameterInstance", inst, Controls.ProxyOptionsStack);
-			inst.StringName:SetText(r.nom);
-			inst.StringName:SetToolTipString(r.aide);
-			inst.PullDown:GetButton():SetToolTipString(r.aide);
+			inst.StringName:SetText(Proxy_T(r.nom));
+			inst.StringName:SetToolTipString(Proxy_T(r.aide));
+			inst.PullDown:GetButton():SetToolTipString(Proxy_T(r.aide));
 			m_proxyPullDowns[r.cle] = inst.PullDown;
 		end
 	end
@@ -198,7 +292,8 @@ if Controls.ProxyTab ~= nil and Controls.ProxyOptions ~= nil and m_tabs ~= nil t
 	Proxy_Refresh();
 
 	-- À chaque ouverture : choix en attente abandonnés (Annuler ferme l'écran sans rien écrire),
-	-- fichier relu (il a pu changer depuis l'autre écran d'options, menu principal ou partie).
+	-- fichier relu (il a pu changer depuis l'autre écran d'options, menu principal ou partie), et
+	-- avertissement mis à jour (une partie a pu être lancée entre-temps).
 	ContextPtr:SetShowHandler(function()
 		OnShow();
 		m_proxyPending = {};
