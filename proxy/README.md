@@ -350,6 +350,20 @@ joueurs.
     `DistrictRangeAttack`). Si la cible n'est pas valide, il appelle `OnUnitFlagClick`.
   - Le clic droit et le lancer de WMD (`ICBM_STRIKE`) ne changent pas.
   - Le correctif travaille sur les octets : le fichier du jeu n'est pas en UTF-8.
+- **Production en cours au changement de ville.** Faute du jeu, présente aussi sans mod. Dans
+  `ProductionPanel.lua`, la production en cours (`CurrentProductionContainer`) et le message
+  « aucune production » (`NoProductionContainer`) ne sont montrés ou cachés qu'au changement
+  d'onglet et, file ouverte, à `CityProductionQueueChanged`. Changer de ville passe par `Refresh`
+  puis `View`, qui remplit la production en cours sans toucher à sa visibilité. Après une ville sans
+  production (par exemple, production choisie puis retirée), celle de la ville suivante restait donc
+  cachée.
+  - Le proxy ajoute [src/ui_production.lua](src/ui_production.lua) à la fin du fichier, pour lire
+    ses variables locales (`patch_production_panel`). Il enveloppe `View` et applique ensuite la
+    règle des onglets : file (`OnTabChangeQueue`) ou production (`OnTabChangeProduction`).
+  - BBG remplace le panneau par un fichier qui inclut `ProductionPanel.lua` : le correctif s'y
+    applique aussi.
+  - Interface seule : rien ne part sur le réseau.
+  - Test hors jeu, sur le vrai fichier du jeu : `lua proxy/tests/test_ui_production.lua`.
 - **L'accroche Lua.** L'exe importe les fonctions HavokScript sous leur nom C++ décoré
   (`?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`). La recherche dans la table d'imports accepte
   donc les deux formes.
@@ -357,7 +371,8 @@ joueurs.
   `ui : …CityBannerInstances.xml : calques ajoutés`, et
   `ui : …CityBannerManager.lua modifié (…), compilation réussie`, et
   `ui : …CityPanel.lua : owningPlayerID corrigé, compilation réussie`, et
-  `ui : …UnitFlagManager.lua : clic sur un drapeau en visée d'une ville ou d'un quartier, compilation réussie`.
+  `ui : …UnitFlagManager.lua : clic sur un drapeau en visée d'une ville ou d'un quartier, compilation réussie`, et
+  `ui : …ProductionPanel.lua : production en cours affichée au changement de ville, compilation réussie`.
   `Lua.log` doit contenir
   `Civ6RolloverProxy : boutons d'attaque au-dessus des drapeaux d'unités`.
 - **Tests hors jeu** (`cargo test --release`) : les remplacements de texte sur les fichiers du jeu et

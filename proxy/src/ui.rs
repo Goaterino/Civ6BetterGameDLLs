@@ -27,9 +27,11 @@
 //!   retirée de la file par un échange (wonder_queue/README.md) est remise en tête par des commandes
 //!   du jeu, rejouées à l'identique par tous les joueurs, proxy ou non.
 //!
-//! Dès que l'accroche Lua est posée, deux défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
-//! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), et un clic sur le
-//! drapeau d'une unité ne tirait pas en visée d'une ville ou d'un quartier (`patch_unit_flags`).
+//! Dès que l'accroche Lua est posée, trois défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
+//! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), un clic sur le
+//! drapeau d'une unité ne tirait pas en visée d'une ville ou d'un quartier (`patch_unit_flags`), et
+//! la production en cours du panneau de production ne se montrait pas en passant d'une ville sans
+//! production à une ville qui en a une (`patch_production_panel`).
 
 use crate::{log, patch, win};
 use std::ffi::{c_char, c_void, CStr};
@@ -208,6 +210,31 @@ pub fn patch_unit_flags(src: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+const PRODUCTION_BLOCK: &str = include_str!("ui_production.lua");
+
+/// Les variables locales de ProductionPanel.lua que lit `ui_production.lua`, et la fonction qu'il
+/// enveloppe.
+const PRODUCTION_NAMES: [&str; 5] =
+    ["local LISTMODE", "local m_isQueueOpen", "local m_hasProductionToShow", "local m_CurrentListMode", "\nfunction View("];
+
+/// En changeant de ville, la production en cours du panneau gardait la visibilité de la ville
+/// précédente : cachée après une ville sans production. `ui_production.lua`, ajouté à la fin du
+/// fichier pour lire ses variables locales, enveloppe `View` et applique la règle des onglets.
+/// Octets laissés tels quels, comme pour les drapeaux.
+pub fn patch_production_panel(src: &[u8]) -> Result<Vec<u8>, String> {
+    let has = |pat: &str| src.windows(pat.len()).any(|w| w == pat.as_bytes());
+    if let Some(missing) = PRODUCTION_NAMES.iter().find(|n| !has(n)) {
+        return Err(format!("{} introuvable", missing.trim_start()));
+    }
+    if has("Civ6RolloverProxy (src/ui_production.lua)") {
+        return Err("déjà corrigé".into());
+    }
+    let mut out = src.to_vec();
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(PRODUCTION_BLOCK.as_bytes());
+    Ok(out)
+}
+
 /// Nom du fichier d'un script, en minuscules.
 fn script_name(chunk: &str) -> String {
     chunk.rsplit(['/', '\\']).next().unwrap_or("").trim_start_matches('@').to_ascii_lowercase()
@@ -328,9 +355,10 @@ pub fn patch_merveilles(src: &[u8]) -> Vec<u8> {
 type Fix = fn(&[u8]) -> Result<Vec<u8>, String>;
 
 /// Corrections appliquées dès que l'accroche Lua est posée : fichier, correction, journal.
-const FIXES: [(&str, Fix, &str); 2] = [
+const FIXES: [(&str, Fix, &str); 3] = [
     ("CityPanel.lua", patch_city_panel, "owningPlayerID corrigé"),
     ("UnitFlagManager.lua", patch_unit_flags, "clic sur un drapeau en visée d'une ville ou d'un quartier"),
+    ("ProductionPanel.lua", patch_production_panel, "production en cours affichée au changement de ville"),
 ];
 
 /// Les cadres que les calques de ui_boutons.xml reproduisent : sans eux, les boutons déplacés ne
@@ -821,6 +849,17 @@ mod tests {
     #[test]
     fn drapeaux_du_jeu() {
         check_flags(format!(r"{GAME}\Base\Assets\UI\UnitFlagManager.lua"));
+    }
+
+    #[test]
+    fn production_panel_du_jeu() {
+        let Some(src) = read(format!(r"{GAME}\Base\Assets\UI\Panels\ProductionPanel.lua")) else { return };
+        let new = patch_production_panel(&src).unwrap();
+        assert!(new.starts_with(&src) && new.ends_with(PRODUCTION_BLOCK.as_bytes()));
+        assert!(patch_production_panel(&new).is_err(), "pas deux fois");
+        assert!(patch_production_panel(b"function View(data) end").is_err());
+        assert!(is_file(r"C:\x\Base\Assets\UI\Panels\ProductionPanel.lua", "ProductionPanel.lua"));
+        assert!(!is_file("ui/replacements/productionpanel_bbg.lua", "ProductionPanel.lua"));
     }
 
     #[test]
