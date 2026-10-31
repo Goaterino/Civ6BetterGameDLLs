@@ -33,9 +33,11 @@
 //! la production en cours du panneau de production ne se montrait pas en passant d'une ville sans
 //! production à une ville qui en a une (`patch_production_panel`).
 
-use crate::{log, patch, win};
+use crate::exe::{self, is_file, iat_slot, replace_buffer, write_slot, GameBuf, ReadXml, XmlHook};
+use crate::{log, win};
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 const LUA_BLOCK: &str = include_str!("ui_boutons.lua");
 const XML_BLOCK: &str = include_str!("ui_boutons.xml");
@@ -55,7 +57,7 @@ static XML_PATCHED: AtomicBool = AtomicBool::new(false);
 
 static IAT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static REAL_LOADBUFFER: AtomicUsize = AtomicUsize::new(0);
-static XML_SITE: AtomicUsize = AtomicUsize::new(0);
+static XML_HOOK: Mutex<Option<XmlHook>> = Mutex::new(None);
 static XML_TRAMP: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_boutons(on: bool) {
@@ -93,12 +95,6 @@ fn active() -> bool {
 
 // ---------------------------------------------------------------------------------------------
 // Remplacements de texte, sans état : testés sur les vrais fichiers (voir les tests en bas).
-
-/// Le chemin finit-il par `/nom` ou `\nom` (ou est-il `nom`), sans tenir compte de la casse ?
-fn is_file(path: &str, name: &str) -> bool {
-    let (p, n) = (path.to_ascii_lowercase(), name.to_ascii_lowercase());
-    p == n || p.ends_with(&format!("/{n}")) || p.ends_with(&format!("\\{n}"))
-}
 
 /// Les fonctions de clic et l'appel qui sélectionne, donc recentre.
 const CLICKS: [(&str, &str); 3] = [
@@ -480,44 +476,6 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
     }
 }
 
-/// Tampon du jeu rempli par la lecture d'un fichier (voir `1409971c0`, qui le réserve).
-#[repr(C)]
-struct GameBuf {
-    ptr: *mut u8,
-    len: usize,
-    cap: usize,
-    /// Objet allocateur : table virtuelle `alloc(this, taille, alignement)`, `free(this, ptr)`.
-    alloc: *const *const usize,
-}
-
-/// Remplace le contenu du tampon, NUL final compris.
-unsafe fn replace_buffer(b: &mut GameBuf, data: &[u8]) -> bool {
-    let need = data.len() + 1;
-    if need > b.cap {
-        if b.alloc.is_null() {
-            return false;
-        }
-        let vt = *b.alloc;
-        let alloc: unsafe extern "C" fn(*const c_void, usize, usize) -> *mut u8 = std::mem::transmute(*vt);
-        let free: unsafe extern "C" fn(*const c_void, *mut u8) = std::mem::transmute(*vt.add(1));
-        let p = alloc(b.alloc as *const c_void, need, 0x10);
-        if p.is_null() {
-            return false;
-        }
-        if !b.ptr.is_null() {
-            free(b.alloc as *const c_void, b.ptr);
-        }
-        b.ptr = p;
-        b.cap = need;
-    }
-    std::ptr::copy_nonoverlapping(data.as_ptr(), b.ptr, data.len());
-    *b.ptr.add(data.len()) = 0;
-    b.len = need;
-    true
-}
-
-type ReadXml = unsafe extern "C" fn(*const u16, *mut GameBuf) -> i32;
-
 unsafe extern "C" fn hook_read_xml(path: *const u16, buf: *mut GameBuf) -> i32 {
     let real: ReadXml = std::mem::transmute(XML_TRAMP.load(Ordering::Relaxed));
     let r = real(path, buf);
@@ -534,12 +492,8 @@ unsafe extern "C" fn hook_read_xml(path: *const u16, buf: *mut GameBuf) -> i32 {
     }
     let b = &mut *buf;
     XML_PATCHED.store(false, Ordering::Relaxed);
-    if b.ptr.is_null() || b.len == 0 {
-        return r;
-    }
-    // Le NUL final ajouté par la lecture n'est pas du texte.
-    let len = if *b.ptr.add(b.len - 1) == 0 { b.len - 1 } else { b.len };
-    match patch_xml(std::slice::from_raw_parts(b.ptr, len)) {
+    let Some(src) = b.text() else { return r };
+    match patch_xml(src) {
         Ok(text) if replace_buffer(b, &text) => {
             XML_PATCHED.store(true, Ordering::Relaxed);
             log(&format!("ui : {name} : calques ajoutés"));
@@ -550,95 +504,6 @@ unsafe extern "C" fn hook_read_xml(path: *const u16, buf: *mut GameBuf) -> i32 {
     r
 }
 
-/// Prologue de la lecture XML, puis son appel à l'ouverture (rel32 libre) et le test qui suit.
-const XML_SIG: [u8; 0x47] = [
-    0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0xfa, 0x48, 0xc7, 0x42,
-    0x08, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x48, 0xc7, 0x40, 0xc8, 0xff, 0xff, 0xff, 0xff,
-    0x48, 0x8d, 0x50, 0xc8, 0x89, 0x58, 0xd4, 0x89, 0x58, 0xd0, 0x48, 0xc7, 0x40, 0xd8, 0x00, 0x00, 0x00, 0x00,
-    0x48, 0xc7, 0x40, 0xe0, 0x00, 0x00, 0x00, 0x00, 0xe8, 0x3d, 0x92, 0xf6, 0xff, 0x3b, 0xc3, 0x74, 0x50,
-];
-/// Octets du rel32 de l'appel, différents d'un exe à l'autre.
-const XML_SIG_FREE: std::ops::Range<usize> = 0x3e..0x42;
-/// mov rax,rsp / mov [rax+8],rbx / push rdi / sub rsp,50h / mov rdi,rdx / mov qword [rdx+8],0 :
-/// aucune instruction relative, recopiées telles quelles.
-const XML_PROLOGUE: usize = 23;
-
-fn find_sig(hay: &[u8]) -> Vec<usize> {
-    hay.windows(XML_SIG.len())
-        .enumerate()
-        .filter(|(_, w)| w.iter().zip(XML_SIG.iter()).enumerate().all(|(i, (a, b))| XML_SIG_FREE.contains(&i) || a == b))
-        .map(|(i, _)| i)
-        .collect()
-}
-
-unsafe fn rd<T: Copy>(at: usize) -> T {
-    std::ptr::read_unaligned(at as *const T)
-}
-
-/// Section `.text` du module : (début, taille).
-unsafe fn text_section(module: usize) -> Option<(usize, usize)> {
-    let nt = module + rd::<u32>(module + 0x3c) as usize;
-    let count = rd::<u16>(nt + 6) as usize;
-    let first = nt + 24 + rd::<u16>(nt + 20) as usize;
-    (0..count).map(|i| first + 40 * i).find(|&s| &rd::<[u8; 8]>(s)[..5] == b".text").map(|s| {
-        let size = rd::<u32>(s + 8) as usize;
-        (module + rd::<u32>(s + 12) as usize, size)
-    })
-}
-
-/// Le nom importé est-il `func`, tel quel ou décoré en C++ (`?func@@…`) ? L'exe importe les
-/// fonctions de HavokScript sous leur nom décoré : `?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`.
-fn is_import(name: &[u8], func: &str) -> bool {
-    name == func.as_bytes() || name.strip_prefix(b"?").and_then(|n| n.strip_prefix(func.as_bytes())).is_some_and(|n| n.starts_with(b"@@"))
-}
-
-/// Entrée de la table d'imports du module pour `dll!func`.
-unsafe fn iat_slot(module: usize, dll: &str, func: &str) -> Option<usize> {
-    let nt = module + rd::<u32>(module + 0x3c) as usize;
-    // PE32+ : répertoire des imports, deuxième entrée des répertoires de données.
-    let imports = rd::<u32>(nt + 24 + 0x78) as usize;
-    if imports == 0 {
-        return None;
-    }
-    let mut d = module + imports;
-    loop {
-        let (oft, name, ft) = (rd::<u32>(d) as usize, rd::<u32>(d + 12) as usize, rd::<u32>(d + 16) as usize);
-        if name == 0 {
-            return None;
-        }
-        let dll_name = CStr::from_ptr((module + name) as *const c_char).to_string_lossy();
-        if dll_name.eq_ignore_ascii_case(dll) {
-            let names = if oft != 0 { oft } else { ft };
-            for i in 0.. {
-                let thunk = rd::<u64>(module + names + i * 8);
-                if thunk == 0 {
-                    break;
-                }
-                if thunk & (1 << 63) != 0 {
-                    continue;
-                }
-                let f = CStr::from_ptr((module + thunk as usize + 2) as *const c_char);
-                if is_import(f.to_bytes(), func) {
-                    return Some(module + ft + i * 8);
-                }
-            }
-            return None;
-        }
-        d += 20;
-    }
-}
-
-unsafe fn write_slot(slot: usize, value: usize) -> bool {
-    let mut old = 0u32;
-    if win::VirtualProtect(slot as *mut c_void, 8, win::PAGE_EXECUTE_READWRITE, &mut old) == 0 {
-        return false;
-    }
-    *(slot as *mut usize) = value;
-    win::VirtualProtect(slot as *mut c_void, 8, old, &mut old);
-    true
-}
-
-/// Appelé quand l'originale vient d'être chargée : l'interface de la partie n'est pas encore lue.
 pub unsafe fn on_gamecore_loaded() {
     if !active() || IAT_SLOT.load(Ordering::Relaxed) != 0 {
         return;
@@ -647,18 +512,16 @@ pub unsafe fn on_gamecore_loaded() {
 
     // XML d'abord : le bloc Lua dépend des calques.
     if BOUTONS.load(Ordering::Relaxed) || JOURNAL.load(Ordering::Relaxed) {
-        let hits = text_section(exe)
-            .map(|(start, size)| find_sig(std::slice::from_raw_parts(start as *const u8, size)).into_iter().map(|o| start + o).collect())
-            .unwrap_or_else(Vec::new);
-        match hits[..] {
-            [at] => match patch::install_at("lecture XML", at, &XML_SIG[..XML_PROLOGUE], at + XML_PROLOGUE, hook_read_xml as *const () as usize) {
-                Ok(tramp) => {
-                    XML_TRAMP.store(tramp, Ordering::Relaxed);
-                    XML_SITE.store(at, Ordering::Relaxed);
+        // Si le proxy de démarrage est installé, la lecture est déjà détournée : on s'enchaîne.
+        match exe::hook_read_xml(exe, hook_read_xml as *const () as usize) {
+            Ok(h) => {
+                XML_TRAMP.store(h.tramp, Ordering::Relaxed);
+                if h.chained {
+                    log("ui : lecture XML déjà détournée (proxy de démarrage), détour enchaîné");
                 }
-                Err(e) => log(&format!("ui : {e}")),
-            },
-            _ => log(&format!("ui : lecture XML trouvée {} fois au lieu d'une, pas de calques", hits.len())),
+                *XML_HOOK.lock().unwrap() = Some(h);
+            }
+            Err(e) => log(&format!("ui : {e}, pas de calques")),
         }
     }
 
@@ -690,15 +553,15 @@ pub unsafe fn on_proxy_unload() {
     if slot != 0 && *(slot as *const usize) == hook_loadbuffer as *const () as usize {
         write_slot(slot, REAL_LOADBUFFER.load(Ordering::Relaxed));
     }
-    let at = XML_SITE.swap(0, Ordering::Relaxed);
-    if at != 0 {
-        patch::restore_at(at, &XML_SIG[..XML_PROLOGUE]);
+    if let Some(h) = XML_HOOK.lock().ok().and_then(|mut g| g.take()) {
+        exe::unhook_read_xml(&h);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exe::{find_sig, is_import, rd};
 
     const GAME: &str = r"C:\Program Files (x86)\Steam\steamapps\common\Sid Meier's Civilization VI";
     const BSM: &str = r"C:\Program Files (x86)\Steam\steamapps\workshop\content\289070\1916397407";
@@ -912,7 +775,7 @@ mod tests {
             let Some(bytes) = read(format!(r"{GAME}\Base\Binaries\Win64Steam\{exe}")) else { continue };
             // Adresse virtuelle relative de chaque occurrence, par les en-têtes de sections.
             let base = bytes.as_ptr() as usize;
-            let (nt, hits) = unsafe { (base + rd::<u32>(base + 0x3c) as usize, find_sig(&bytes)) };
+            let (nt, hits) = unsafe { (base + rd::<u32>(base + 0x3c) as usize, find_sig(&bytes, false)) };
             assert_eq!(hits.len(), 1, "{exe}");
             let rva = unsafe {
                 let count = rd::<u16>(nt + 6) as usize;

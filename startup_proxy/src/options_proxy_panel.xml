@@ -1,0 +1,10 @@
+					<!-- BetterGameDLLs : onglet des proxys, ajouté par le proxy de démarrage (options_proxy.lua le remplit) -->
+					<Container ID="ProxyOptions" Size="parent,parent" Hidden="1">
+						<ScrollPanel ID="ProxyOptionsScrollPanel" Offset="20,3" Size="parent-40,parent" AutoScrollBar="1" Vertical="1" Anchor="R,T">
+							<Stack ID="ProxyOptionsStack" Anchor="L,T" StackGrowth="Down" Padding="5" Offset="0,25" Size="parent-24,auto">
+								<Label ID="ProxyWarning" Anchor="L,T" Style="ShellOptionText" WrapWidth="720" Color="255,200,90,255" String=""/>
+								<Label ID="ProxyStatus" Anchor="L,T" Style="ShellOptionText" WrapWidth="720" String=""/>
+							</Stack>
+							<ScrollBar Style="Slider_Blue" Anchor="R,C" AnchorSide="O,I"/>
+						</ScrollPanel>
+					</Container>

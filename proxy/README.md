@@ -58,7 +58,10 @@ Le mode se règle dans `rollover_proxy.cfg`, à côté de la DLL, par une ligne 
 | `off` | aucun détour |
 
 Les autres réglages (`portee`, `ameliorations`, `rendements`, `wmd_accel`, `ui_*`,
-`tours_production`) sont décrits plus bas, avec leur détour.
+`tours_production`) sont décrits plus bas, avec leur détour. Ils se changent aussi en jeu, dans
+l'onglet **BetterGameDLLs** de l'écran d'options, qu'ajoute le proxy de démarrage
+([startup_proxy](../startup_proxy/README.md)). **Tout nouveau réglage doit y figurer** : le test
+`cles_communes_avec_le_proxy` (startup_proxy) le vérifie.
 
 **Journal** : `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier `Logs` du jeu.
 On y trouve :
@@ -364,6 +367,11 @@ joueurs.
     applique aussi.
   - Interface seule : rien ne part sur le réseau.
   - Test hors jeu, sur le vrai fichier du jeu : `lua proxy/tests/test_ui_production.lua`.
+- **Code commun avec le proxy de démarrage.** La table d'imports, la signature et le tampon de
+  la lecture XML sont dans [src/exe.rs](src/exe.rs), que `startup_proxy` inclut aussi. Le proxy de
+  démarrage détourne la lecture XML le premier : on y trouve alors son `jmp [rip+0]`, qu'on recopie
+  dans notre trampoline (`ui : lecture XML déjà détournée (proxy de démarrage), détour enchaîné`).
+  Au déchargement, on remet ce saut, pas le prologue d'origine.
 - **L'accroche Lua.** L'exe importe les fonctions HavokScript sous leur nom C++ décoré
   (`?luaL_loadbuffer@@YAHPEAUlua_State@@PEBD_K1@Z`). La recherche dans la table d'imports accepte
   donc les deux formes.

@@ -13,6 +13,7 @@
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
 
 mod coalesce;
+mod exe;
 mod forward;
 mod improvements;
 mod patch;
