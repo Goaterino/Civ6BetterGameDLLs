@@ -4,12 +4,19 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
 const RRF_RT_REG_SZ: u32 = 0x2;
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x40;
 const SW_HIDE: i32 = 0;
 const INFINITE: u32 = 0xFFFF_FFFF;
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 0x2;
+const COINIT_APARTMENTTHREADED: u32 = 0x2;
+
+/// Fenêtre ouverte de l'installeur : parent de l'invite UAC, qui passe ainsi au premier plan.
+pub static OWNER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 #[repr(C)]
 struct SHELLEXECUTEINFOW {
@@ -30,17 +37,52 @@ struct SHELLEXECUTEINFOW {
     hProcess: *mut c_void,
 }
 
+#[repr(C)]
+pub struct ACTCTXW {
+    pub cbSize: u32,
+    pub dwFlags: u32,
+    pub lpSource: *const u16,
+    pub wProcessorArchitecture: u16,
+    pub wLangId: u16,
+    pub lpAssemblyDirectory: *const u16,
+    pub lpResourceName: *const u16,
+    pub lpApplicationName: *const u16,
+    pub hModule: *mut c_void,
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
     fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
     fn CloseHandle(handle: *mut c_void) -> i32;
-    pub fn FreeConsole() -> i32;
+    pub fn CreateActCtxW(ctx: *const ACTCTXW) -> *mut c_void;
+    pub fn ActivateActCtx(ctx: *mut c_void, cookie: *mut usize) -> i32;
+    pub fn LoadLibraryW(name: *const u16) -> *mut c_void;
+    pub fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn GlobalAlloc(flags: u32, size: usize) -> *mut c_void;
+    fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+    fn GlobalUnlock(mem: *mut c_void) -> i32;
+    fn GlobalFree(mem: *mut c_void) -> *mut c_void;
+}
+
+#[link(name = "user32")]
+extern "system" {
+    pub fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+    pub fn SetProcessDPIAware() -> i32;
+    fn OpenClipboard(hwnd: *mut c_void) -> i32;
+    fn EmptyClipboard() -> i32;
+    fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
+    fn CloseClipboard() -> i32;
 }
 
 #[link(name = "shell32")]
 extern "system" {
     fn ShellExecuteExW(info: *mut SHELLEXECUTEINFOW) -> i32;
+}
+
+#[link(name = "ole32")]
+extern "system" {
+    fn CoInitializeEx(reserved: *mut c_void, flags: u32) -> i32;
 }
 
 #[link(name = "advapi32")]
@@ -56,7 +98,7 @@ extern "system" {
     ) -> i32;
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -91,10 +133,13 @@ pub fn run_elevated(exe: &Path, params: &str) -> Result<u32, String> {
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.hwnd = OWNER.load(Ordering::Relaxed);
     info.lpVerb = verb.as_ptr();
     info.lpFile = file.as_ptr();
     info.lpParameters = params.as_ptr();
     info.nShow = SW_HIDE;
+    // ShellExecuteEx demande COM sur le thread appelant (ici, celui de la fenêtre de progression).
+    unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
     if unsafe { ShellExecuteExW(&mut info) } == 0 || info.hProcess.is_null() {
         return Err("droits d'administrateur refusés".into());
     }
@@ -105,4 +150,26 @@ pub fn run_elevated(exe: &Path, params: &str) -> Result<u32, String> {
         CloseHandle(info.hProcess);
     }
     Ok(code)
+}
+
+pub fn copy_to_clipboard(text: &str) -> bool {
+    let text = wide(text);
+    unsafe {
+        if OpenClipboard(OWNER.load(Ordering::Relaxed)) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+        let mem = GlobalAlloc(GMEM_MOVEABLE, text.len() * 2);
+        let ok = !mem.is_null() && {
+            let dst = GlobalLock(mem) as *mut u16;
+            std::ptr::copy_nonoverlapping(text.as_ptr(), dst, text.len());
+            GlobalUnlock(mem);
+            !SetClipboardData(CF_UNICODETEXT, mem).is_null()
+        };
+        if !ok && !mem.is_null() {
+            GlobalFree(mem);
+        }
+        CloseClipboard();
+        ok
+    }
 }

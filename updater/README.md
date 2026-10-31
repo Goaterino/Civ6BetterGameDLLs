@@ -5,18 +5,20 @@ GitHub (voir [release/README.md](../release/README.md)). Il est publié avec cha
 
 ## Utilisation
 
-- **Double-clic** : un menu affiche le dossier du jeu, la dernière version et l'état de chaque DLL
-  (original du jeu, proxy à jour, autre version), puis propose d'installer, mettre à jour/réparer
-  ou désinstaller.
-- **`--game-dir "<dossier>"`** : même menu, pour un jeu hors des bibliothèques Steam.
+- **Double-clic** : une fenêtre (TaskDialog de Windows) affiche le dossier du jeu, la dernière
+  version et l'état de l'installation (pas installé, à jour, mise à jour disponible, à réparer), le
+  détail par DLL sous « Détails », et propose installer, mettre à jour ou réparer, et désinstaller.
+  Après une installation, elle donne l'option de lancement Steam, avec un bouton pour la copier.
+- **`--game-dir "<dossier>"`** : même fenêtre, pour un jeu hors des bibliothèques Steam.
 - **Options de lancement Steam** (Propriétés > Général) :
   ```
   "C:\chemin\vers\BetterGameDLLs.exe" %command%
   ```
-  À chaque lancement, l'installeur vérifie la dernière release, installe ou répare si besoin
-  (après une vérification des fichiers ou une mise à jour du jeu par Steam), ferme sa console puis
-  lance le jeu et attend sa fin. Un échec (GitHub injoignable, droits refusés) est affiché
-  5 secondes, et le jeu se lance quand même.
+  À chaque lancement, l'installeur vérifie la dernière release (environ 1 s, sans fenêtre si tout
+  est à jour), installe ou répare si besoin derrière une fenêtre de progression (après une
+  vérification des fichiers ou une mise à jour du jeu par Steam), puis lance le jeu et attend sa
+  fin, pour que Steam le voie en cours. Un échec (GitHub injoignable, droits refusés) est affiché,
+  et le jeu se lance quand même.
 
 ## Fonctionnement
 
@@ -32,6 +34,9 @@ GitHub (voir [release/README.md](../release/README.md)). Il est publié avec cha
 - **Droits** : si le dossier du jeu n'est pas modifiable (Program Files), seule la pose est relancée
   en administrateur (`--apply`, invite UAC, sans fenêtre), qui revérifie signature et SHA-256 avant
   de copier.
+- **Fenêtres** : le TaskDialog vient de comctl32 v6, qu'on active d'habitude par un manifeste
+  embarqué dans l'exe. La chaîne GNU n'ayant pas `windres`, `gui.rs` l'active au démarrage par un
+  contexte d'activation, à partir d'un manifeste écrit dans `%TEMP%\BetterGameDLLs`.
 - **À jour** : le SHA-256 de la DLL installée est celui du manifeste ; les DLL ne connaissent pas
   leur numéro de release.
 
