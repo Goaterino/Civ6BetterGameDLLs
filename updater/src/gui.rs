@@ -3,11 +3,13 @@
 //! d'activation, à partir d'un manifeste écrit dans le dossier de travail.
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
+use crate::lang::{self, t, LANGUAGES};
 use crate::win::{self, wide, SendMessageW};
 
 #[repr(C, packed)]
@@ -57,6 +59,8 @@ const TDN_CREATED: u32 = 0;
 const TDN_BUTTON_CLICKED: u32 = 2;
 const TDN_TIMER: u32 = 4;
 const TDN_DESTROYED: u32 = 5;
+const TDN_RADIO_BUTTON_CLICKED: u32 = 6;
+const IDCLOSE: usize = 8;
 const WM_USER: u32 = 0x400;
 const TDM_CLICK_BUTTON: u32 = WM_USER + 102;
 const TDM_SET_PROGRESS_BAR_MARQUEE: u32 = WM_USER + 107;
@@ -66,6 +70,11 @@ const S_FALSE: i32 = 1;
 
 /// Bouton de la fenêtre de progression, grisé jusqu'à la fin du travail.
 const WAIT_BUTTON: i32 = 1000;
+/// Boutons radio des langues : `RADIO_BASE` + rang dans `LANGUAGES`.
+const RADIO_BASE: i32 = 2000;
+
+/// Rendu par `ask` quand le joueur a changé de langue : la fenêtre est à reconstruire.
+pub const LANGUAGE_CHANGED: i32 = -1;
 
 const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -100,6 +109,8 @@ struct Ctx<'a> {
     keep_open: &'a dyn Fn(i32) -> bool,
     /// Fenêtre de progression : fin du travail.
     done: Option<&'a AtomicBool>,
+    /// Le joueur a choisi une autre langue.
+    relang: Cell<bool>,
 }
 
 fn load() -> Option<TaskDialogIndirect> {
@@ -144,13 +155,21 @@ unsafe extern "system" fn callback(hwnd: *mut c_void, msg: u32, wparam: usize, _
             None if (ctx.keep_open)(wparam as i32) => return S_FALSE,
             _ => {}
         },
+        TDN_RADIO_BUTTON_CLICKED => {
+            let index = (wparam as i32 - RADIO_BASE) as usize;
+            if index < LANGUAGES.len() && index != lang::current() {
+                lang::set(index);
+                ctx.relang.set(true);
+                SendMessageW(hwnd, TDM_CLICK_BUTTON, IDCLOSE, 0);
+            }
+        }
         TDN_DESTROYED => win::OWNER.store(null_mut(), Ordering::Relaxed),
         _ => {}
     }
     S_OK
 }
 
-fn run(page: &Page, flags: i32, common: i32, ctx: &Ctx) -> i32 {
+fn run(page: &Page, flags: i32, common: i32, radios: bool, ctx: &Ctx) -> i32 {
     let Some(task_dialog) = *TASK_DIALOG.get_or_init(load) else {
         return 0;
     };
@@ -163,7 +182,7 @@ fn run(page: &Page, flags: i32, common: i32, ctx: &Ctx) -> i32 {
     let instruction = wide(page.instruction);
     let content = wide(page.content);
     let details = page.details.map(wide);
-    let (expand, collapse) = (wide("Masquer les détails"), wide("Détails"));
+    let (expand, collapse) = (wide(t(["Masquer les détails", "Hide details"])), wide(t(["Détails", "Details"])));
     let texts: Vec<Vec<u16>> = page.buttons.iter().map(|(_, text)| wide(text)).collect();
     let buttons: Vec<TASKDIALOG_BUTTON> = page
         .buttons
@@ -181,6 +200,17 @@ fn run(page: &Page, flags: i32, common: i32, ctx: &Ctx) -> i32 {
     cfg.pszContent = content.as_ptr();
     cfg.cButtons = buttons.len() as u32;
     cfg.pButtons = buttons.as_ptr();
+    let labels: Vec<Vec<u16>> = LANGUAGES.iter().map(|l| wide(l.label)).collect();
+    let radio_buttons: Vec<TASKDIALOG_BUTTON> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| TASKDIALOG_BUTTON { nButtonID: RADIO_BASE + i as i32, pszButtonText: label.as_ptr() })
+        .collect();
+    if radios {
+        cfg.cRadioButtons = radio_buttons.len() as u32;
+        cfg.pRadioButtons = radio_buttons.as_ptr();
+        cfg.nDefaultRadioButton = RADIO_BASE + lang::current() as i32;
+    }
     if let Some(details) = &details {
         cfg.pszExpandedInformation = details.as_ptr();
         cfg.pszExpandedControlText = expand.as_ptr();
@@ -192,18 +222,23 @@ fn run(page: &Page, flags: i32, common: i32, ctx: &Ctx) -> i32 {
     cfg.cxWidth = 320;
     let mut pressed = 0;
     unsafe { task_dialog(&cfg, &mut pressed, null_mut(), null_mut()) };
-    pressed
+    if ctx.relang.get() {
+        LANGUAGE_CHANGED
+    } else {
+        pressed
+    }
 }
 
-/// Fenêtre à liens de commande et bouton Fermer ; renvoie l'identifiant du bouton choisi.
+/// Fenêtre à liens de commande, choix de la langue et bouton Fermer ; renvoie l'identifiant du
+/// bouton choisi, ou `LANGUAGE_CHANGED`.
 pub fn ask(page: &Page, keep_open: &dyn Fn(i32) -> bool) -> i32 {
     let flags = if page.buttons.is_empty() { 0 } else { TDF_USE_COMMAND_LINKS };
-    run(page, flags, TDCBF_CLOSE_BUTTON, &Ctx { keep_open, done: None })
+    run(page, flags, TDCBF_CLOSE_BUTTON, true, &Ctx { keep_open, done: None, relang: Cell::new(false) })
 }
 
 pub fn message(icon: Icon, instruction: &str, content: &str) {
     let page = Page { icon, instruction, content, details: None, buttons: &[] };
-    run(&page, 0, TDCBF_OK_BUTTON, &Ctx { keep_open: &|_| false, done: None });
+    run(&page, 0, TDCBF_OK_BUTTON, false, &Ctx { keep_open: &|_| false, done: None, relang: Cell::new(false) });
 }
 
 /// Fait `work` sur un autre thread, derrière une fenêtre de progression qui se ferme à la fin.
@@ -218,12 +253,12 @@ pub fn progress(instruction: &str, work: impl FnOnce() -> Result<(), String> + S
         let page = Page {
             icon: Icon::Info,
             instruction,
-            content: "Merci de patienter.",
+            content: t(["Merci de patienter.", "Please wait."]),
             details: None,
-            buttons: &[(WAIT_BUTTON, "Fermer")],
+            buttons: &[(WAIT_BUTTON, t(["Fermer", "Close"]))],
         };
         let flags = TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER;
-        run(&page, flags, 0, &Ctx { keep_open: &|_| false, done: Some(&done) });
+        run(&page, flags, 0, false, &Ctx { keep_open: &|_| false, done: Some(&done), relang: Cell::new(false) });
         worker.join().unwrap()
     })
 }

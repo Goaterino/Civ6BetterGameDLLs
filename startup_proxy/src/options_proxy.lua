@@ -38,9 +38,10 @@ local PROXY_CACHE = {
 	{ "verify", { "Vérification (diagnostic, plus lent)", "Verification (diagnostic, slower)" } },
 };
 
--- Une entrée par réglage lu par le proxy de GameCore (read_config, proxy/src/lib.rs) : un test
--- (cargo test, startup_proxy) vérifie que les deux listes concordent. `defaut` est la valeur que
--- prend le proxy quand la clé manque au fichier.
+-- Une entrée par réglage lu par le proxy de GameCore (read_config, proxy/src/lib.rs) ou par celui-ci
+-- (verif_maj, src/maj.rs) : un test (cargo test, startup_proxy) vérifie que les listes concordent.
+-- `defaut` est la valeur que prend le proxy quand la clé manque au fichier. `libre` : jamais grisé
+-- par l'interrupteur général, qui ne concerne que le proxy de GameCore.
 local PROXY_REGLAGES = {
 	{ titre = { "Général", "General" } },
 	-- Interrupteur général : off, les autres réglages sont grisés (et gardés dans le fichier).
@@ -49,6 +50,13 @@ local PROXY_REGLAGES = {
 		aide = {
 			"Désactive d'un coup tous les changements du proxy de GameCore, sans le désinstaller : le jeu se comporte comme sans proxy. Les autres réglages sont gardés, et cet onglet reste là pour le réactiver.",
 			"Turns off all GameCore proxy changes at once, without uninstalling it: the game behaves as without the proxy. The other settings are kept, and this tab stays available to turn it back on.",
+		},
+		choix = PROXY_ON_OFF },
+	{ cle = "verif_maj", defaut = "on", libre = true,
+		nom = { "Recherche des mises à jour", "Check for updates" },
+		aide = {
+			"Au lancement du jeu, cherche sur GitHub une nouvelle version de BetterGameDLLs, et la propose au menu principal. Prend effet au prochain lancement du jeu.",
+			"When the game starts, looks on GitHub for a new version of BetterGameDLLs, and offers it in the main menu. Takes effect the next time the game starts.",
 		},
 		choix = PROXY_ON_OFF },
 
@@ -246,7 +254,7 @@ local function Proxy_Populate()
 				end
 				Controls.ConfirmButton:SetDisabled(false);
 				if r.general then Proxy_Populate(); end
-			end, locked and not r.general);
+			end, locked and not (r.general or r.libre));
 		end
 	end
 	Controls.ProxyOptionsStack:CalculateSize();

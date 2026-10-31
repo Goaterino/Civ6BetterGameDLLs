@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::lang::f;
 use crate::release::{self, Manifest};
 use crate::win;
 
@@ -99,7 +100,7 @@ pub fn run(action: Action, game: &Path, work: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     match win::run_elevated(&exe, &params)? {
         0 => Ok(()),
-        code => Err(fs::read_to_string(work.join(ERROR_FILE)).unwrap_or(format!("échec (code {code})"))),
+        code => Err(fs::read_to_string(work.join(ERROR_FILE)).unwrap_or(f(["échec (code {})", "failure (code {})"], &[&code]))),
     }
 }
 
@@ -136,7 +137,7 @@ fn install(game: &Path, work: &Path, m: &Manifest) -> Result<(), String> {
     // La release doit poser exactement nos cibles, aux mêmes endroits.
     let known = |f: &release::File| TARGETS.iter().any(|t| t.name == f.name && t.dest == f.dest);
     if m.files.len() != TARGETS.len() || !m.files.iter().all(known) {
-        return Err(format!("la release {} demande un installeur plus récent", m.version));
+        return Err(f(["la version {} demande un installeur plus récent : télécharge-le depuis la page de la release.", "version {} needs a newer installer: download it from the release page."], &[&m.version]));
     }
     let mut ours = Vec::new();
     for t in &TARGETS {
@@ -164,7 +165,7 @@ fn uninstall(game: &Path) -> Result<(), String> {
     for t in &TARGETS {
         let is = t.is_ours(game)?;
         if is && !t.orig(game).exists() {
-            return Err(format!("{} manque : vérifie les fichiers du jeu dans Steam", t.orig(game).display()));
+            return Err(f(["{} manque : vérifie les fichiers du jeu dans Steam.", "{} is missing: verify the game files in Steam."], &[&t.orig(game).display()]));
         }
         ours.push(is);
     }

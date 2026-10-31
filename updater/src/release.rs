@@ -3,12 +3,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::lang::{self, t};
+
+/// Pas de fenêtre de console pour curl.exe : l'installeur n'en a pas.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const RELEASES: &str = "https://github.com/Goaterino/Civ6BetterGameDLLs/releases";
 const PUBLIC_KEY: &str = include_str!("../../release/public_key.txt");
@@ -68,16 +74,16 @@ fn verify_manifest(work: &Path) -> Result<Manifest, String> {
     let data = fs::read(work.join("manifest.json")).map_err(|e| format!("manifest.json : {e}"))?;
     let sig = fs::read_to_string(work.join("manifest.json.sig")).map_err(|e| format!("manifest.json.sig : {e}"))?;
     let sig = b64.decode(sig.trim()).ok().and_then(|s| <[u8; 64]>::try_from(s).ok());
-    let sig = sig.ok_or("signature du manifeste illisible")?;
-    key.verify_strict(&data, &Signature::from_bytes(&sig)).map_err(|_| "signature du manifeste invalide")?;
-    serde_json::from_slice(&data).map_err(|e| format!("manifeste illisible : {e}"))
+    let sig = sig.ok_or(t(["signature du manifeste illisible", "unreadable manifest signature"]))?;
+    key.verify_strict(&data, &Signature::from_bytes(&sig)).map_err(|_| t(["signature du manifeste invalide", "invalid manifest signature"]))?;
+    serde_json::from_slice(&data).map_err(|e| lang::f(["manifeste illisible : {}", "unreadable manifest: {}"], &[&e]))
 }
 
 fn check_file(work: &Path, f: &File) -> Result<(), String> {
     if sha256(&work.join(&f.name))? == f.sha256 {
         Ok(())
     } else {
-        Err(format!("{} : SHA-256 différent de celui du manifeste", f.name))
+        Err(lang::f(["{} : SHA-256 différent de celui du manifeste", "{}: SHA-256 differs from the manifest"], &[&f.name]))
     }
 }
 
@@ -97,11 +103,12 @@ fn download(url: &str, dest: &Path) -> Result<(), String> {
         .args(["-fsSL", "--retry", "2", "-o"])
         .arg(dest)
         .arg(url)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe : {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("téléchargement de {url} : {}", String::from_utf8_lossy(&out.stderr).trim()))
+        Err(lang::f(["téléchargement de {} : {}", "download of {}: {}"], &[&url, &String::from_utf8_lossy(&out.stderr).trim()]))
     }
 }

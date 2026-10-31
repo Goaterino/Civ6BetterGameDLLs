@@ -141,7 +141,7 @@ pub fn run_elevated(exe: &Path, params: &str) -> Result<u32, String> {
     // ShellExecuteEx demande COM sur le thread appelant (ici, celui de la fenêtre de progression).
     unsafe { CoInitializeEx(null_mut(), COINIT_APARTMENTTHREADED) };
     if unsafe { ShellExecuteExW(&mut info) } == 0 || info.hProcess.is_null() {
-        return Err("droits d'administrateur refusés".into());
+        return Err(crate::lang::t(["droits d'administrateur refusés", "administrator rights denied"]).into());
     }
     let mut code = 1;
     unsafe {

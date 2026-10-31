@@ -4,3 +4,11 @@
 //! la même : l'augmenter à chaque version qui change la simulation ou l'échange du salon.
 
 pub const VERSION: &str = "0.1.0";
+
+/// Numéro de la release GitHub qui a produit ces DLL : `BGD_RELEASE`, posé par le workflow de release
+/// (.github/workflows/release.yml). Aucun pour une compilation locale, qui ne cherche donc pas de
+/// mise à jour (`startup_proxy/src/maj.rs`).
+pub const RELEASE: Option<&str> = match option_env!("BGD_RELEASE") {
+    Some(v) if !v.is_empty() => Some(v),
+    _ => None,
+};

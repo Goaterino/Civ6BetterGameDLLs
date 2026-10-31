@@ -146,7 +146,7 @@ pub fn gamecore_config_read() -> bool {
     }
 }
 
-fn read_config() -> Result<(String, bool), String> {
+pub(crate) fn read_config() -> Result<(String, bool), String> {
     let dir = gamecore_dir().ok_or("dossier du jeu introuvable")?;
     let installed = dir.join(GAMECORE_ORIGINAL).exists();
     match std::fs::read_to_string(dir.join(CFG_NAME)) {
@@ -179,7 +179,7 @@ pub(crate) type LuaCFn = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
 
 pub(crate) struct Hks {
     push_fstring: unsafe extern "C-unwind" fn(*mut c_void, *const c_char, ...) -> *const c_char,
-    push_integer: unsafe extern "C-unwind" fn(*mut c_void, i32),
+    pub(crate) push_integer: unsafe extern "C-unwind" fn(*mut c_void, i32),
     push_nil: unsafe extern "C-unwind" fn(*mut c_void),
     pub(crate) to_lstring: unsafe extern "C-unwind" fn(*mut c_void, i32, *mut usize) -> *const c_char,
     push_closure: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, i32, *const c_char, i32),
@@ -314,6 +314,8 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
     if name.is_null() || buf.is_null() {
         return real(l, buf, size, name);
     }
+    // Premier script de l'exe, bien avant le menu principal : la vérification a le temps d'aboutir.
+    crate::maj::start();
     let chunk = CStr::from_ptr(name).to_string_lossy();
     let src = std::slice::from_raw_parts(buf, size);
     let (text, what) = match script_name(&chunk).as_str() {
@@ -322,6 +324,7 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
             (patch_options_lua(src), "options : onglet des proxys ajouté")
         }
         crate::salon::SCRIPT => (crate::salon::prepare(l, src), "salon : annonce de version ajoutée"),
+        crate::maj::SCRIPT => (crate::maj::prepare(l, src), "maj : notification de mise à jour ajoutée"),
         _ => return real(l, buf, size, name),
     };
     let r = real(l, text.as_ptr(), text.len(), name);
@@ -446,7 +449,9 @@ mod tests {
     /// et chaque réglage qu'il lit figure dans l'onglet.
     #[test]
     fn cles_communes_avec_le_proxy() {
-        let lib = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../proxy/src/lib.rs")).unwrap();
+        // Clés lues par le proxy de GameCore, et par celui-ci (verif_maj).
+        let mut lib = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../proxy/src/lib.rs")).unwrap();
+        lib += include_str!("maj.rs");
         let read: Vec<&str> = lib.split("strip_prefix(\"").skip(1).map(|s| s.split("=\")").next().unwrap()).collect();
         let tab: Vec<&str> = LUA_BLOCK.split("cle = \"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
         assert!(read.len() >= 12, "{read:?}");

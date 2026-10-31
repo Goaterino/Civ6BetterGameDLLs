@@ -43,7 +43,7 @@ unsafe extern "C-unwind" fn lua_token(l: *mut std::ffi::c_void) -> i32 {
     1
 }
 
-unsafe extern "C-unwind" fn lua_log(l: *mut std::ffi::c_void) -> i32 {
+pub(crate) unsafe extern "C-unwind" fn lua_log(l: *mut std::ffi::c_void) -> i32 {
     let Some(h) = hks() else { return 0 };
     let mut len = 0usize;
     let p = (h.to_lstring)(l, 1, &mut len);

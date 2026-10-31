@@ -18,9 +18,12 @@ Les scripts Lua et XML sont compilés dans les DLL (`include_str!`) : aucun autr
 L'updater lit `releases/latest/download/manifest.json` (une redirection, sans l'API GitHub ni sa
 limite de requêtes), vérifie la signature avec [public_key.txt](public_key.txt), puis télécharge
 chaque fichier depuis `releases/download/v<version>/` et contrôle son SHA-256. Ces adresses ne
-répondent que si le dépôt est public. Un proxy installé est
-à jour si son SHA-256 est celui du manifeste : les DLL n'ont pas besoin de connaître leur numéro de
-release.
+répondent que si le dépôt est public. Pour l'installeur, un
+proxy installé est à jour si son SHA-256 est celui du manifeste.
+
+Sur un tag, le workflow grave aussi la version dans les DLL (`BGD_RELEASE`, voir
+[proxy/src/version.rs](../proxy/src/version.rs)) : le proxy de démarrage la compare au manifeste pour
+proposer les mises à jour au menu principal. Une compilation locale n'en a pas, et ne vérifie rien.
 
 `version` (le tag) et `lobby_version` sont distincts : une release qui ne touche ni la simulation ni
 l'échange du salon garde la même `lobby_version` et reste compatible en multijoueur avec la précédente.

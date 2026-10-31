@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use crate::win;
@@ -40,6 +41,7 @@ pub fn from_command(exe: &Path) -> Option<PathBuf> {
 pub fn running() -> bool {
     Command::new("tasklist")
         .args(["/FI", "IMAGENAME eq CivilizationVI*", "/FO", "CSV", "/NH"])
+        .creation_flags(crate::release::CREATE_NO_WINDOW)
         .output()
         .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).to_lowercase().contains("civilizationvi"))
 }

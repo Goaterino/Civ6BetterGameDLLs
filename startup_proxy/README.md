@@ -5,6 +5,8 @@ Gathering Storm. Ce second proxy est chargé au démarrage de l'exe, avant le me
 ajoute à l'écran d'options du jeu un onglet **BetterGameDLLs**, qui édite les réglages du proxy de
 GameCore (`rollover_proxy.cfg`). Dans le salon multijoueur, il annonce sa version aux autres joueurs,
 et l'hôte établit si tous ont le proxy (voir [Le salon multijoueur](#le-salon-multijoueur--qui-a-le-proxy-)).
+Au menu principal, il propose les nouvelles versions (voir
+[La notification de mise à jour](#la-notification-de-mise-à-jour)).
 
 ## Pourquoi DatabaseDLL
 
@@ -133,6 +135,34 @@ n'existe), et l'arrivée d'un joueur en cours de partie n'est pas traitée. Elle
 correctifs POL pour tous, au même point de la simulation sur chaque machine, et l'hôte l'annoncera
 dans le chat.
 
+## La notification de mise à jour
+
+[src/maj.rs](src/maj.rs) et [src/maj.lua](src/maj.lua).
+
+- **La vérification.** Au premier script Lua chargé par l'exe, bien avant le menu principal, un
+  thread lit `releases/latest/download/manifest.json` (le `curl.exe` de Windows, sans fenêtre, 20 s
+  au plus) et compare sa `version` à celle gravée dans ces DLL par le workflow de release
+  (`BGD_RELEASE`, `RELEASE` dans [proxy/src/version.rs](../proxy/src/version.rs)). Une compilation
+  locale n'a pas de version de release : elle ne vérifie rien. Le manifeste n'est pas vérifié ici :
+  il ne sert qu'à prévenir, et l'installeur vérifie sa signature avant d'installer.
+- **Le réglage.** `verif_maj=on|off` (on par défaut), dans l'onglet BetterGameDLLs, jamais grisé
+  par l'interrupteur général, qui ne concerne que le proxy de GameCore. Lu au lancement du jeu.
+- **L'accroche.** La même accroche `luaL_loadbuffer` ajoute `maj.lua` à la fin de `MainMenu.lua`,
+  après avoir posé `Civ6Proxy_MiseAJour([action])` et `Civ6Proxy_Journal(texte)`. Le bloc enveloppe
+  le gestionnaire d'affichage du menu, et, tant que la notification reste à montrer, sa mise à jour
+  par image : il attend la fin de la vérification, et la fermeture d'un autre message du menu.
+- **Le message**, dans le popup du menu (`g_PopupDialog`), en français ou en anglais selon la langue
+  du jeu : « La version 0.1.2 de BetterGameDLLs est disponible (installée : 0.1.1) ».
+  - **Mettre à jour** lance l'installeur, `%LOCALAPPDATA%\BetterGameDLLs\BetterGameDLLs.exe`
+    (il s'y copie à chaque installation), avec `--after-game <dossier de l'exe>`, puis ferme le jeu
+    (`UI.ExitGame()`). L'installeur attend la fin du jeu, installe, et propose de le relancer.
+    Sans installeur à cet endroit, la page de la release s'ouvre dans le navigateur, et le jeu reste
+    ouvert.
+  - **Plus tard** (ou Échap) : plus de notification jusqu'au prochain lancement du jeu.
+- **Le journal** : `maj : version … disponible (installée : …)`, `maj : à jour …`,
+  `maj : vérification impossible : …`, `maj : notification de la version …`, `maj : installeur
+  lancé (…)`, et toute erreur du bloc, qui n'est jamais propagée au menu.
+
 ## Compiler, tester, installer
 
 ```bash
@@ -155,6 +185,12 @@ cd startup_proxy && cargo build --release
 
   ```bash
   lua startup_proxy/tests/test_salon.lua
+  ```
+- Le bloc de la notification, dans un menu principal simulé : vérification en cours, nouvelle
+  version, à jour, autre popup ouvert, Mettre à jour, Plus tard, installeur absent, anglais, erreur.
+
+  ```bash
+  lua startup_proxy/tests/test_maj.lua
   ```
 - La DLL : elle se charge, chaque export aboutit à la même adresse que dans l'original, la ligne de
   journal est écrite. Une fois le proxy installé, l'original est `DatabaseDLL_FinalRelease_orig.dll`.

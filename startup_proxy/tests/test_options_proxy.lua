@@ -153,7 +153,7 @@ do
 		if b.parent ~= C.ProxyOptionsStack then rows = -100; end
 		if b.name == "PullDownParameterInstance" then rows = rows + 1; else titles = titles + 1; end
 	end
-	Check("13 réglages et 5 titres, dans le panneau", rows == 13 and titles == 5);
+	Check("14 réglages et 5 titres, dans le panneau", rows == 14 and titles == 5);
 	Check("avertissement : redémarrage du jeu", (C.ProxyWarning.text or ""):find("redémarrage du jeu") ~= nil);
 	Check("état : proxy installé", C.ProxyStatus.text == "Proxy de GameCore installé.");
 
@@ -241,6 +241,11 @@ do
 	Check("général off : seul actif=off écrit", m.written[1] == "actif=off");
 	m.show();
 	Check("général off relu : grisés", boutons.PullDown.disabled);
+	local maj = m.Row("Recherche des mises à jour");
+	Check("général off : recherche des mises à jour jamais grisée", maj ~= nil and not maj.PullDown.disabled);
+	m.Choose(maj, "Désactivé");
+	C.ConfirmButton.callbacks.LClick();
+	Check("verif_maj=off écrit", m.written[#m.written] == "verif_maj=off");
 	m.Choose(actif, "Activé");
 	Check("général on : modifiables à nouveau", not boutons.PullDown.disabled);
 end

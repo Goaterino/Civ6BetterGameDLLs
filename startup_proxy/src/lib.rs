@@ -23,6 +23,7 @@ mod patch;
 mod win;
 
 mod options;
+mod maj;
 mod salon;
 #[path = "../../proxy/src/version.rs"]
 mod version;

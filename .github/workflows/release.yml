@@ -21,7 +21,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Version
         run: |
@@ -40,8 +40,11 @@ jobs:
           (cd proxy && cargo test --release)
           (cd startup_proxy && cargo test --release)
 
+      # Sur un tag, la version de la release est gravée dans les DLL (proxy/src/version.rs, RELEASE) :
+      # le proxy de démarrage s'en sert pour la notification de mise à jour.
       - name: Compilation
         run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then export BGD_RELEASE="$VERSION"; fi
           (cd proxy && cargo build --release)
           (cd startup_proxy && cargo build --release)
           (cd updater && cargo build --release)
@@ -49,7 +52,7 @@ jobs:
           cp proxy/target/release/GameCore_XP2_FinalRelease.dll startup_proxy/target/release/DatabaseDLL_FinalRelease.dll dist/
           cp updater/target/release/BetterGameDLLs.exe dist/
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -64,12 +67,12 @@ jobs:
           python release/manifest.py verify dist/manifest.json
 
       # Provenance des binaires (gh attestation verify) : réservée aux dépôts publics hors offre Enterprise.
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         if: ${{ !github.event.repository.private }}
         with:
           subject-path: dist/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: BetterGameDLLs-${{ env.VERSION }}
           path: dist/

@@ -9,16 +9,22 @@ GitHub (voir [release/README.md](../release/README.md)). Il est publié avec cha
   version et l'état de l'installation (pas installé, à jour, mise à jour disponible, à réparer), le
   détail par DLL sous « Détails », et propose installer, mettre à jour ou réparer, et désinstaller.
   Après une installation, elle donne l'option de lancement Steam, avec un bouton pour la copier.
+  Chaque fenêtre à choix propose aussi la langue (boutons radio, voir Langues).
 - **`--game-dir "<dossier>"`** : même fenêtre, pour un jeu hors des bibliothèques Steam.
 - **Options de lancement Steam** (Propriétés > Général) :
   ```
-  "C:\chemin\vers\BetterGameDLLs.exe" %command%
+  "%LOCALAPPDATA%\BetterGameDLLs\BetterGameDLLs.exe" %command%
   ```
   À chaque lancement, l'installeur vérifie la dernière release (environ 1 s, sans fenêtre si tout
   est à jour), installe ou répare si besoin derrière une fenêtre de progression (après une
   vérification des fichiers ou une mise à jour du jeu par Steam), puis lance le jeu et attend sa
   fin, pour que Steam le voie en cours. Un échec (GitHub injoignable, droits refusés) est affiché,
   et le jeu se lance quand même.
+- **`--after-game [<dossier>]`** : lancé par la notification de mise à jour du jeu
+  ([startup_proxy](../startup_proxy/README.md#la-notification-de-mise-à-jour)), qui se ferme
+  aussitôt. Attend la fin du jeu (une minute au plus), installe la dernière release, puis propose
+  de relancer Civilization VI par Steam (`steam://rungameid/289070`). Le dossier, celui de l'exe du
+  jeu, sert à retrouver le jeu même hors des bibliothèques Steam.
 
 ## Fonctionnement
 
@@ -34,11 +40,29 @@ GitHub (voir [release/README.md](../release/README.md)). Il est publié avec cha
 - **Droits** : si le dossier du jeu n'est pas modifiable (Program Files), seule la pose est relancée
   en administrateur (`--apply`, invite UAC, sans fenêtre), qui revérifie signature et SHA-256 avant
   de copier.
+- **Emplacement fixe** : après chaque installation, l'installeur se copie dans
+  `%LOCALAPPDATA%\BetterGameDLLs\BetterGameDLLs.exe`, s'il n'y tourne pas déjà. La notification du
+  jeu le lance là, et l'option de lancement Steam proposée le désigne : peu importe où le joueur a
+  téléchargé l'exe, et la copie suit le dernier installeur lancé.
+- **Pas de console** : l'exe est une application fenêtrée, et `curl.exe` et `tasklist` sont lancés
+  sans fenêtre (`CREATE_NO_WINDOW`).
 - **Fenêtres** : le TaskDialog vient de comctl32 v6, qu'on active d'habitude par un manifeste
   embarqué dans l'exe. La chaîne GNU n'ayant pas `windres`, `gui.rs` l'active au démarrage par un
   contexte d'activation, à partir d'un manifeste écrit dans `%TEMP%\BetterGameDLLs`.
-- **À jour** : le SHA-256 de la DLL installée est celui du manifeste ; les DLL ne connaissent pas
-  leur numéro de release.
+- **À jour** : le SHA-256 de la DLL installée est celui du manifeste. L'installeur ne se fie pas au
+  numéro de release gravé dans les DLL : une compilation locale n'en a pas.
+
+## Langues
+
+[src/lang.rs](src/lang.rs). Français et anglais ; chaque texte est un tableau à une entrée par
+langue de `LANGUAGES`, dans le même ordre, si bien qu'ajouter une langue fait échouer la compilation
+de chaque texte qui ne l'a pas encore. Le choix du joueur, fait par les boutons radio des fenêtres,
+réaffiche aussitôt la fenêtre et est gardé dans `%LOCALAPPDATA%\BetterGameDLLs\langue.txt` ; sans
+choix, la langue de Windows si elle est connue, sinon l'anglais.
+
+- Les libellés portent un drapeau en emoji (🇫🇷, 🇬🇧), mais Windows n'a pas de glyphe pour les
+  drapeaux : il les montre en petites lettres (« FR », « GB »).
+- Les boutons standard de Windows (« Fermer », « OK ») suivent la langue de Windows, pas ce choix.
 
 ## Tester sans GitHub
 
