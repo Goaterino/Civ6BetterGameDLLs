@@ -32,13 +32,15 @@ l'échange du salon garde la même `lobby_version` et reste compatible en multij
 
 1. Vérifier que tout est commité et poussé : la release ne compile que le contenu du tag.
 2. Si la release change la simulation ou l'échange du salon, augmenter `VERSION` dans
-   `proxy/src/version.rs`.
-3. Taguer et pousser :
+   `proxy/src/version.rs` (X.Y.0). Jamais pour une release qui ne change ni l'une ni l'autre.
+3. Choisir le tag : le X.Y du tag est celui de `VERSION`. Si `VERSION` vient de monter, `vX.Y.0`
+   (`VERSION` 0.2.0 → `v0.2.0`) ; sinon, le patch suivant du dernier tag (`v0.2.0` → `v0.2.1`).
+4. Taguer et pousser :
    ```
    git tag v0.2.0
    git push origin v0.2.0
    ```
-4. Le workflow teste, compile, signe et crée une release **en brouillon**. La relire sur GitHub, puis
+5. Le workflow teste, compile, signe et crée une release **en brouillon**. La relire sur GitHub, puis
    la publier : l'updater ne voit que les releases publiées.
 
 Lancé à la main (onglet Actions, *Run workflow*), le workflow compile et signe sans créer de release ;
