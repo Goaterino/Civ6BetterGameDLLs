@@ -419,6 +419,27 @@ Analyse : [production_turns/README.md](../production_turns/README.md).
 - **Test hors jeu.** `check_hooks.py` vérifie la redirection des quatre appels, puis leur
   restauration. `cargo test` vérifie la conversion du facteur en virgule fixe.
 
+## Septième détour : choix des cases travaillées (correctif POL)
+
+[src/citoyens.rs](src/citoyens.rs). Analyse : [citoyens/README.md](../citoyens/README.md).
+
+- **La faute du jeu.** Le sac à dos qui choisit les cases (`18010f050`) compare les combinaisons
+  avec une règle qui n'est pas un ordre : avec le focus nourriture et production, une ville peut
+  travailler une 2/1 à côté d'une 2/2 libre.
+- **Le détour** refait le choix exactement : au plus `K` emplacements ; parmi ceux qui couvrent le
+  déficit de nourriture s'il y en a, le meilleur score favori puis autre ; à égalité, le moins
+  d'emplacements. Prologue recopié : 15 octets de `mov` sans adresse relative.
+- **Correctif POL, sans réglage.** Il change la simulation : il ne s'applique que si l'export
+  `BgdPolActifs` du proxy de démarrage rend 1 (tous les joueurs ont la même version, ou partie
+  locale). Sinon, ou sans le proxy de démarrage, l'originale. Le détour posé lève le bit 16 de
+  `RolloverProxyStatus` ; avec `actif=off`, il n'est pas posé, et le proxy de démarrage ne
+  s'annonce pas dans le salon.
+- **Le journal.** `citoyens : détour posé en 0x18010f050, BetterGameDLLs 0.2.0`,
+  `citoyens : correctifs POL actifs|coupés`, et les 30 premiers écarts de chaque partie avec le
+  choix de l'originale (`citoyens : choix corrigé …`).
+- **Tests.** `cargo test` compare le choix à une recherche exhaustive (20 000 tirages) ;
+  `check_hooks.py` vérifie la pose et la restauration du détour.
+
 ## Merveille retirée de la file après deux échanges
 
 Analyse et trace : [wonder_queue/README.md](../wonder_queue/README.md). Quand une merveille déjà

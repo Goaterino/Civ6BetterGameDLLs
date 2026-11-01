@@ -41,6 +41,13 @@ pub extern "system" fn StartupProxyStatus() -> u32 {
     STATUS.load(Ordering::Relaxed)
 }
 
+/// Export lu par le proxy de GameCore avant chaque correctif POL : 1 s'ils sont actifs pour la
+/// partie en cours (voir `salon`).
+#[no_mangle]
+pub extern "system" fn BgdPolActifs() -> u32 {
+    salon::pol_actifs() as u32
+}
+
 pub(crate) fn log(msg: &str) {
     let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::Path::new(&d).join("Civ6RolloverProxy")) else {
         return;

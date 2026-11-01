@@ -14,6 +14,7 @@
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
 
+mod citoyens;
 mod coalesce;
 mod exe;
 mod forward;
@@ -23,6 +24,8 @@ mod rendements;
 mod rendements_empire;
 mod tours;
 mod ui;
+#[allow(dead_code)] // RELEASE ne sert qu'au proxy de démarrage.
+mod version;
 mod win;
 mod wmd;
 
@@ -41,8 +44,12 @@ pub(crate) static STATUS: AtomicU32 = AtomicU32::new(0);
 pub(crate) const ST_DLLMAIN: u32 = 1;
 pub(crate) const ST_ORIGINAL: u32 = 2;
 pub(crate) const ST_HOOKED: u32 = 8;
+/// Correctifs POL posés (`citoyens`) : le proxy de démarrage ne s'annonce dans le salon que si ce
+/// bit est là, une fois ce proxy chargé.
+pub(crate) const ST_POL: u32 = 16;
 
-/// Export de diagnostic : DllMain appelée (1), originale chargée (2), détours posés (8).
+/// Export de diagnostic : DllMain appelée (1), originale chargée (2), détours posés (8), correctifs
+/// POL posés (16).
 #[no_mangle]
 pub extern "system" fn RolloverProxyStatus() -> u32 {
     STATUS.load(Ordering::Relaxed)
@@ -159,6 +166,7 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, reserve
         // chargée, on y remet les octets d'origine pour qu'aucun saut ne vise ce proxy déchargé.
         win::DLL_PROCESS_DETACH if reserved.is_null() => {
             coalesce::on_proxy_unload();
+            citoyens::on_proxy_unload();
             improvements::on_proxy_unload();
             rendements::on_proxy_unload();
             rendements_empire::on_proxy_unload();

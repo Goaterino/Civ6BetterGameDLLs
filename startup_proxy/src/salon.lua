@@ -2,9 +2,13 @@
 -- BetterGameDLLs : annonce de version dans le salon multijoueur, ajoutée à la fin de
 -- StagingRoom.lua (ou de son remplaçant, celui de MPH par exemple) par le proxy de démarrage
 -- (startup_proxy/src/salon.rs). Fonctions natives posées par le proxy :
---   Civ6Proxy_Version()       -> version de BetterGameDLLs (proxy/src/version.rs)
---   Civ6Proxy_Jeton()         -> une chaîne neuve à chaque appel
---   Civ6Proxy_Journal(texte)  -> écrit dans RolloverProxy.log
+--   Civ6Proxy_Version()                -> version de BetterGameDLLs (proxy/src/version.rs) ; ou nil
+--                                         et la raison, si cette machine n'appliquerait pas les
+--                                         correctifs POL : elle ne s'annonce pas
+--   Civ6Proxy_Jeton()                  -> une chaîne neuve à chaque appel
+--   Civ6Proxy_Journal(texte)           -> écrit dans RolloverProxy.log
+--   Civ6Proxy_FixerPol(actif, raison)  -> état lu par le proxy de GameCore (1 ou 0) : 0 à chaque
+--                                         ouverture du salon, puis notre conclusion du verdict
 --
 -- Les configurations de joueur sont enregistrées avec la partie : une sauvegarde rechargée rapporte
 -- les annonces et le verdict d'une session précédente, peut-être chez des joueurs qui n'ont plus le
@@ -37,11 +41,13 @@ local BGD_CLE_VERSION = "BGD_VERSION";
 local BGD_CLE_VERDICT = "BGD_VERDICT";
 
 local BGD = {
-	version = (Civ6Proxy_Version ~= nil) and Civ6Proxy_Version() or nil,
+	version = nil,     -- notre version, nil si cette machine n'appliquerait pas les correctifs POL
+	raison = nil,      -- pourquoi, dans ce cas
 	jeton = nil,       -- hôte : son jeton de cette ouverture du salon
 	perso = nil,       -- notre jeton de cette ouverture du salon
 	instantane = {},   -- annonces de chaque joueur à l'ouverture du salon
 	message = nil,     -- dernier message envoyé dans le chat
+	ouvert = false,    -- salon ouvert : de l'ouverture au chargement de la partie (ou au départ)
 };
 
 local BGD_FR = false;
@@ -63,10 +69,13 @@ local function BGD_Journal(texte)
 	end
 end
 
--- Partie en réseau en direct : ni hotseat, ni PlayByCloud, où les joueurs n'ouvrent pas le salon
--- ensemble et ne peuvent donc pas partager un jeton.
+-- Salon ouvert d'une partie en réseau en direct : ni hotseat, ni PlayByCloud, où les joueurs
+-- n'ouvrent pas le salon ensemble et ne peuvent donc pas partager un jeton. Une fois la partie
+-- chargée, le salon se tait : le contexte reste chargé et reçoit encore les événements, et un
+-- bilan en pleine partie couperait les correctifs POL sur une seule machine. QueuePopup affiche le
+-- salon en différé : ContextPtr:IsHidden() ne dit pas s'il est ouvert.
 local function BGD_Concerne()
-	return BGD.version ~= nil
+	return BGD.ouvert and BGD.version ~= nil
 		and GameConfiguration.IsNetworkMultiplayer()
 		and not GameConfiguration.IsHotseat()
 		and not GameConfiguration.IsPlayByCloud();
@@ -187,6 +196,8 @@ local function BGD_Publier()
 		Network.BroadcastPlayerInfo();
 		BGD_Journal("annonce " .. annonce .. (Network.IsGameHost() and (", verdict " .. tostring(cfg:GetValue(BGD_CLE_VERDICT))) or ""));
 	end
+	-- L'état lu par le proxy de GameCore suit le verdict jusqu'au lancement.
+	Civ6Proxy_FixerPol(BGD_PolActifs() and 1 or 0, "verdict de l'hôte");
 end
 
 -- Un message dans le chat, pour tous, une fois par contenu.
@@ -269,6 +280,14 @@ end
 -- jetons, instantané des annonces présentes, puis la nôtre. Les autres se réannoncent en voyant le
 -- nouveau jeton de l'hôte.
 local function BGD_Ouverture()
+	BGD.ouvert = true;
+	-- Correctifs POL coupés jusqu'au verdict ; disponibilité relue, elle change quand le proxy de
+	-- GameCore se charge (première partie) ou que ses réglages changent.
+	Civ6Proxy_FixerPol(0, "ouverture du salon");
+	BGD.version, BGD.raison = Civ6Proxy_Version();
+	if BGD.version == nil then
+		BGD_Journal("pas d'annonce : " .. tostring(BGD.raison));
+	end
 	BGD.jeton = nil;
 	BGD.perso = nil;
 	BGD.message = nil;
@@ -281,7 +300,7 @@ local function BGD_Ouverture()
 	BGD_Publier();
 end
 
-if BGD.version == nil then
+if Civ6Proxy_FixerPol == nil or Civ6Proxy_Version == nil then
 	BGD_Journal("fonctions natives absentes : pas d'annonce");
 else
 	local BGD_StartLaunchCountdown = StartLaunchCountdown;
@@ -296,12 +315,22 @@ else
 	end
 	LuaEvents.HostGame_ShowStagingRoom.Add(BGD_Protege(BGD_Ouverture));
 	LuaEvents.JoiningRoom_ShowStagingRoom.Add(BGD_Protege(BGD_Ouverture));
-	Events.MultiplayerHostMigrated.Add(BGD_Protege(BGD_Ouverture));
+	Events.MultiplayerHostMigrated.Add(BGD_Protege(function()
+		if BGD.ouvert then
+			BGD_Ouverture();
+		end
+	end));
+	-- Partie chargée, ou salon quitté : le salon se tait (voir BGD_Concerne).
+	local function fermeture()
+		BGD.ouvert = false;
+	end
+	Events.LoadScreenContentReady.Add(fermeture);
+	Events.LeaveGameComplete.Add(fermeture);
 	Events.MultiplayerPlayerConnected.Add(BGD_Protege(BGD_Publier));
 	Events.PlayerInfoChanged.Add(BGD_Protege(function()
 		if not ContextPtr:IsHidden() then
 			BGD_Publier();
 		end
 	end));
-	BGD_Journal("bloc chargé, version " .. BGD.version);
+	BGD_Journal("bloc chargé");
 end

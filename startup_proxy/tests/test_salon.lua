@@ -6,9 +6,16 @@
 -- pas le bloc. On vérifie les annonces, le verdict de l'hôte et le message du chat au lancement.
 
 local dir = arg[0]:match("^(.*)[/\\]") or ".";
-local f = assert(io.open(dir .. "/../src/salon.lua", "rb"));
-local BLOCK = f:read("a");
-f:close();
+local function ReadFile(path)
+	local f = assert(io.open(path, "rb"));
+	local s = f:read("a");
+	f:close();
+	return s;
+end
+local BLOCK = ReadFile(dir .. "/../src/salon.lua");
+-- Relais de l'hôte en cours de partie (InGame.lua) et écran de chargement (LoadScreen.lua).
+local PARTIE = ReadFile(dir .. "/../src/partie.lua");
+local CHARGEMENT = ReadFile(dir .. "/../src/chargement.lua");
 
 local failures = 0;
 local function check(cond, what)
@@ -61,7 +68,8 @@ local function NewLobby(joueurs, options)
 		m.luaEvents = setmetatable({}, { __index = function(t, k) local e = NewEvent(); rawset(t, k, e); return e; end });
 		env.Events = m.events;
 		env.LuaEvents = m.luaEvents;
-		env.ContextPtr = { IsHidden = function() return false; end };
+		-- Le salon est caché une fois la partie lancée (`m.cache`).
+		env.ContextPtr = { IsHidden = function() return m.cache == true; end };
 		env.Locale = {
 			GetCurrentLanguage = function() return { Type = options.lang or "fr_FR" }; end,
 			Lookup = function(s) return s; end,
@@ -89,6 +97,7 @@ local function NewLobby(joueurs, options)
 				IsHuman = function() return joueurs[pid + 1].ia ~= true; end,
 				GetSlotStatus = function() return 1; end,
 				GetPlayerName = function() return joueurs[pid + 1].nom; end,
+				GetReady = function() return joueurs[pid + 1].pret == true; end,
 			};
 		end });
 		env.Network = {
@@ -101,7 +110,13 @@ local function NewLobby(joueurs, options)
 		};
 		env.StartLaunchCountdown = function() m.countdowns = (m.countdowns or 0) + 1; end
 		if j.proxy ~= false then
-			env.Civ6Proxy_Version = function() return j.version or "0.1.0"; end
+			-- `indispo` : le proxy de démarrage est là, mais cette machine n'appliquerait pas les
+			-- correctifs POL (proxy de GameCore absent ou désactivé).
+			env.Civ6Proxy_Version = function()
+				if j.indispo then return nil, j.indispo; end
+				return j.version or "0.1.0";
+			end
+			env.Civ6Proxy_FixerPol = function(actif) m.pol = (actif == 1); end
 			env.Civ6Proxy_Jeton = function() lobby.tokens = lobby.tokens + 1; return "j" .. lobby.tokens; end
 			env.Civ6Proxy_Journal = function(t) m.log = (m.log or "") .. t .. "\n"; end
 			local chunk = assert(load(BLOCK, "=salon.lua", "t", env));
@@ -131,12 +146,17 @@ local function NewLobby(joueurs, options)
 	return lobby;
 end
 
--- Conclusion de chaque machine équipée au lancement, d'après son journal.
+-- Conclusion de chaque machine équipée au lancement : l'état passé au proxy (Civ6Proxy_FixerPol),
+-- qui doit concorder avec la ligne du journal.
 local function Pol(lobby, id)
-	local log = lobby.machines[id].log or "";
+	local m = lobby.machines[id];
 	local last;
-	for v in log:gmatch("lancement : correctifs POL (%S+)") do last = v; end
-	return last;
+	for v in (m.log or ""):gmatch("lancement : correctifs POL (%S+)") do last = v; end
+	local etat = (m.pol == true) and "actifs" or "désactivés";
+	if last ~= nil and last ~= etat then
+		return "journal " .. last .. " / état " .. etat;
+	end
+	return etat;
 end
 
 local function LastChat(lobby)
@@ -261,6 +281,122 @@ do
 	l.machines[0].env.Network.IsPlayerConnected = function() return true; end
 	l.machines[0].events.MultiplayerPlayerConnected.Fire(1);
 	check(l.actif() == "0", "après l'arrivée de Bob sans proxy : 0");
+end
+
+-- 11. Proxy de démarrage présent, mais correctifs POL indisponibles sur cette machine : Bob ne
+-- s'annonce pas, compte comme sans BetterGameDLLs, et n'active rien chez lui.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob", indispo = "proxys désactivés (actif=off)" } });
+	l.machines[1].pol = true;  -- reste d'une partie solo
+	l.open();
+	check(l.actif() == "0", "Bob indisponible : verdict 0");
+	check(l.machines[1].values[1].BGD_VERSION == nil, "Bob ne s'annonce pas");
+	l.countdown();
+	check(LastChat(l):find("Sans BetterGameDLLs : Bob", 1, true), "Bob listé : " .. LastChat(l));
+	check(Pol(l, 0) == "désactivés" and Pol(l, 1) == "désactivés", "POL coupés chez tous, Bob compris");
+	check(l.machines[1].log:find("pas d'annonce : proxys désactivés", 1, true), "raison au journal de Bob");
+end
+
+-- 12. Un salon réutilise l'état : une partie avec tous équipés, puis un salon où il manque un joueur.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" } });
+	l.open();
+	l.countdown();
+	check(Pol(l, 0) == "actifs" and Pol(l, 1) == "actifs", "premier salon : actifs");
+	l.open();
+	check(Pol(l, 0) == "actifs", "réouverture, tous encore là : actifs");
+end
+
+-- La partie démarre : les salons se cachent, l'hôte charge le relais de InGame.lua.
+local function Lancer(l)
+	for _, m in pairs(l.machines) do
+		m.cache = true;
+		m.events.LoadScreenContentReady.Fire();
+	end
+	local hote = l.machines[l.host];
+	hote.env.Civ6Proxy_PolActifs = function() return hote.pol and 1 or 0; end
+	assert(load(PARTIE, "=partie.lua", "t", hote.env))();
+end
+
+-- 13. Reconnexion en cours de partie d'un joueur équipé : nouveau jeton, que l'hôte relaie ; il
+-- conclut comme les autres.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" }, { nom = "Zoé" } });
+	l.open();
+	l.countdown();
+	Lancer(l);
+	local bob = l.machines[1];
+	bob.cache = false;
+	bob.luaEvents.JoiningRoom_ShowStagingRoom.Fire();
+	check(Pol(l, 1) == "actifs", "Bob reconnecté : actifs (" .. Pol(l, 1) .. ")");
+	check(l.machines[0].log:find("partie : verdict relayé", 1, true), "relais journalisé chez l'hôte");
+	check(#l.chat == 1, "pas de message pour une reconnexion équipée");
+end
+
+-- 14. En cours de partie, correctifs POL actifs : un joueur sans proxy arrive. L'hôte prévient une
+-- fois, quand il est prêt.
+do
+	local joueurs = { { nom = "Hôte" }, { nom = "Bob" }, { nom = "Léo", proxy = false, absent = true } };
+	local l = NewLobby(joueurs);
+	l.open();
+	l.countdown();
+	Lancer(l);
+	local hote = l.machines[0];
+	joueurs[3].absent = false;
+	hote.events.MultiplayerPlayerConnected.Fire(2);
+	check(#l.chat == 1, "pas encore prêt : pas de message");
+	joueurs[3].pret = true;
+	hote.events.PlayerInfoChanged.Fire(2);
+	hote.events.PlayerInfoChanged.Fire(2);
+	check(#l.chat == 2 and LastChat(l):find("^%[COLOR_RED%]BGD %- Léo : arrivée sans BetterGameDLLs"), "message de l'hôte : " .. LastChat(l));
+	check(Pol(l, 0) == "actifs", "l'état ne change pas en pleine partie");
+end
+
+-- 15. Correctifs POL coupés pour la partie : l'arrivée d'un joueur sans proxy ne change rien.
+do
+	local joueurs = { { nom = "Hôte" }, { nom = "Bob", proxy = false }, { nom = "Léo", proxy = false, absent = true } };
+	local l = NewLobby(joueurs);
+	l.open();
+	l.countdown();
+	Lancer(l);
+	joueurs[3].absent, joueurs[3].pret = false, true;
+	l.machines[0].events.PlayerInfoChanged.Fire(2);
+	check(#l.chat == 1, "POL coupés : pas d'avertissement en partie");
+end
+
+-- 15 bis. En pleine partie, une migration d'hôte ou une connexion ne rouvre pas le salon : l'état
+-- reste celui du lancement sur chaque machine.
+do
+	local l = NewLobby({ { nom = "Hôte" }, { nom = "Bob" }, { nom = "Zoé" } });
+	l.open();
+	l.countdown();
+	Lancer(l);
+	l.host = 1;
+	for _, m in pairs(l.machines) do
+		m.events.MultiplayerHostMigrated.Fire(1);
+		m.events.MultiplayerPlayerConnected.Fire(2);
+	end
+	for id = 0, 2 do check(Pol(l, id) == "actifs", "migration en partie, machine " .. id .. " : " .. Pol(l, id)); end
+end
+
+-- 16. Écran de chargement : actifs en solo et en hotseat, inchangé en réseau.
+do
+	for _, cas in ipairs({ { reseau = false, attendu = true }, { reseau = true, attendu = false } }) do
+		local etat = false;
+		local ev = NewEvent();
+		local env = setmetatable({
+			Events = { LoadScreenContentReady = ev },
+			GameConfiguration = {
+				IsNetworkMultiplayer = function() return cas.reseau; end,
+				IsHotseat = function() return false; end,
+			},
+			Civ6Proxy_FixerPol = function(a) etat = (a == 1); end,
+			Civ6Proxy_Journal = function() end,
+		}, { __index = _G });
+		assert(load(CHARGEMENT, "=chargement.lua", "t", env))();
+		ev.Fire();
+		check(etat == cas.attendu, "chargement, réseau " .. tostring(cas.reseau));
+	end
 end
 
 if failures > 0 then

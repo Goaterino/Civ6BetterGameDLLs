@@ -17,6 +17,8 @@ détours dans GameCore et dans l'exe, et les analyses qui l'ont motivé. Sépar�
 - [empire_yields](empire_yields/README.md) : rendements d'empire du bandeau figés après un gouverneur ou
   un personnage illustre, rafraîchis par le proxy sans désynchro ;
 - [map_pins](map_pins/README.md) : lag des épingles de carte en multijoueur (analyse statique) ;
+- [citoyens](citoyens/README.md) : choix des cases travaillées qui préfère une 2/1 à une 2/2,
+  corrigé dans le proxy (premier correctif POL, actif si tous les joueurs ont le proxy) ;
 - [pantheon](pantheon/README.md) : joueur désigné pour le panthéon, égalités et restriction d'un tour
   (analyse statique) ;
 - [netcode](netcode/README.md) : reconnexions et boucles de désynchro (hooks Frida, empreintes), analyse dans

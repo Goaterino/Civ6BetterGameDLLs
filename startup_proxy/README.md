@@ -96,8 +96,17 @@ ne s'activent que si tous les humains ont BetterGameDLLs à la même version. Le
   réglable, et seule elle est échangée : les correctifs POL n'ont pas de réglage.
 - **L'accroche.** La même accroche `luaL_loadbuffer` que l'onglet ajoute `salon.lua` à la fin de
   `StagingRoom.lua`, ou de son remplaçant du même nom (celui de MPH, par exemple), après avoir posé
-  `Civ6Proxy_Version()`, `Civ6Proxy_Jeton()` et `Civ6Proxy_Journal(texte)`. Le bloc ne s'appuie que
-  sur les événements du jeu et sur `StartLaunchCountdown`, présents dans les deux versions.
+  `Civ6Proxy_Version()`, `Civ6Proxy_Jeton()`, `Civ6Proxy_Journal(texte)` et
+  `Civ6Proxy_FixerPol(actif, raison)`. Le bloc ne s'appuie que sur les événements du jeu et sur
+  `StartLaunchCountdown`, présents dans les deux versions. Il ne fait rien hors de la période où le
+  salon est ouvert : de l'ouverture au chargement de la partie (`LoadScreenContentReady`) ou au
+  départ (`LeaveGameComplete`). Le contexte reste chargé en partie et y reçoit encore les
+  événements ; `ContextPtr:IsHidden()` ne suffit pas, le salon s'affichant en différé
+  (`QueuePopup`).
+- **Qui s'annonce.** Seule une machine qui appliquera les correctifs POL. `Civ6Proxy_Version()` rend
+  nil et la raison si le proxy de GameCore n'est pas installé, si `actif=off`, ou, une fois chargé,
+  s'il n'a pas posé ses correctifs POL (bit 16 de `RolloverProxyStatus`). Elle ne s'annonce pas, et
+  compte donc comme sans BetterGameDLLs.
 - **Les jetons.** Les configurations de joueur sont enregistrées avec la partie : une sauvegarde
   rechargée rapporte les annonces et le verdict d'une session précédente, peut-être chez des
   joueurs qui n'ont plus le proxy. Chaque ouverture du salon, et chaque migration d'hôte, tire donc
@@ -118,22 +127,50 @@ ne s'activent que si tous les humains ont BetterGameDLLs à la même version. Le
 - **Les messages.** Au démarrage du compte à rebours de lancement, dans le chat, pour tous, une fois
   par contenu, dans la langue de l'émetteur :
   - l'hôte, en rouge : `BGD - Sans BetterGameDLLs : Bob. BetterGameDLLs d'une autre version que
-    0.1.0 : Zoé (0.0.9). Correctifs POL désactivés pour cette partie.` ;
-  - l'hôte, en vert : `BGD - Tous les joueurs ont BetterGameDLLs 0.1.0 : correctifs POL actifs.` ;
+    0.2.0 : Zoé (0.1.0). Correctifs POL désactivés pour cette partie.` ;
+  - l'hôte, en vert : `BGD - Tous les joueurs ont BetterGameDLLs 0.2.0 : correctifs POL actifs.` ;
   - si l'hôte n'a pas reçu notre annonce, le premier client équipé, par ordre d'identifiant, en
     rouge : `BGD - L'hôte n'a pas BetterGameDLLs, ou pas une version compatible : correctifs POL
     désactivés pour cette partie.` Équipé : son annonce a changé depuis l'ouverture du salon, ce
     qu'une annonce restée d'une sauvegarde ne fait pas. Un client arrivé après l'annonce d'un autre
     ne la voit pas changer : les deux peuvent alors écrire le même message, mais il n'en manque
     jamais.
-- **Le journal** : `salon : bloc chargé, version …`, `salon : annonce …, verdict …`,
+- **L'état lu par le proxy de GameCore.** `BgdPolActifs`, export de ce proxy, rend 1 si les
+  correctifs POL sont actifs pour la partie en cours. L'interface le tient à jour par
+  `Civ6Proxy_FixerPol` :
+  - le salon le met à 0 à chaque ouverture, puis à sa conclusion du verdict après chaque annonce ;
+  - au chargement d'une partie qui n'est pas en réseau (solo, hotseat), `chargement.lua`, ajouté à
+    la fin de `LoadScreen.lua`, le met à 1 : une seule machine, rien à désynchroniser ;
+  - en réseau, rien d'autre ne le change jusqu'au prochain salon.
+- **En cours de partie : reconnexions.** Un joueur qui rejoint ou se reconnecte repasse par le salon
+  et tire un nouveau jeton, que l'hôte, en jeu, ne verrait pas. `partie.lua`, ajouté à la fin de
+  `InGame.lua` (ou de son remplaçant, celui de MPH), le relaie : quand un humain connecté annonce la
+  version et le jeton de l'hôte, celui-ci ajoute son jeton au verdict, sans en changer l'état. Le
+  nouveau venu conclut comme les autres. Si les correctifs POL sont actifs et qu'un humain se met
+  prêt sans s'être annoncé, l'hôte écrit en rouge : `BGD - Léo : arrivée sans BetterGameDLLs (ou
+  d'une autre version) alors que les correctifs POL sont actifs. Sa partie va se désynchroniser.`
+- **Le journal** : `salon : bloc chargé`, `salon : pas d'annonce : <raison>`,
+  `pol : correctifs POL actifs|désactivés (<raison>)` à chaque changement de l'état,
+  `partie : verdict relayé : …`, `salon : annonce …, verdict …`,
   `salon : message : …`, `salon : lancement : correctifs POL actifs|désactivés` (la conclusion de
   chaque machine), et toute erreur du bloc, qui n'est jamais propagée au salon.
 
-**Pas encore fait :** le proxy de GameCore ne lit pas encore le verdict (aucun correctif POL
-n'existe), et l'arrivée d'un joueur en cours de partie n'est pas traitée. Elle devra couper les
-correctifs POL pour tous, au même point de la simulation sur chaque machine, et l'hôte l'annoncera
-dans le chat.
+**Les correctifs POL** à ce jour : le choix des cases travaillées
+([citoyens/README.md](../citoyens/README.md)).
+
+**Pas encore fait :**
+- un joueur sans le proxy qui arrive en cours de partie alors que les correctifs POL sont actifs se
+  désynchronise ; l'hôte le dit seulement. Les couper pour tous demande de le faire au même point
+  de la simulation sur chaque machine, par une commande du jeu ;
+- après une migration d'hôte en cours de partie, le nouvel hôte n'a pas le verdict : un joueur qui
+  se reconnecte ensuite conclut « désactivés » alors que les autres les appliquent ;
+- un joueur qui rejoint en cours de partie doit recevoir le verdict relayé avant de quitter le salon
+  pour le chargement.
+
+**Risque connu :** au premier salon d'une session, le proxy de GameCore n'est pas encore chargé. La
+machine s'annonce si le fichier de réglages le permet ; si, au lancement, le détour ne peut pas être
+posé (jeu mis à jour sans le proxy), elle n'appliquera pas les correctifs que les autres
+appliquent. Le journal le dit (`citoyens : version inattendue`).
 
 ## La notification de mise à jour
 
@@ -186,7 +223,9 @@ cd startup_proxy && cargo build --release
 - Le bloc du salon, sur plusieurs machines simulées qui ont chacune leur copie des configurations
   de joueur : tous équipés, joueur sans proxy, annonce restée d'une sauvegarde, autre version, IA
   et absents, hôte sans proxy (un client prévient), hotseat, migration d'hôte, arrivée tardive,
-  verdict périmé rediffusé par un hôte qui n'a plus le proxy.
+  verdict périmé rediffusé par un hôte qui n'a plus le proxy, machine qui ne s'annonce pas,
+  reconnexion en cours de partie (relais de l'hôte), arrivée sans proxy en cours de partie,
+  migration d'hôte en partie, écran de chargement en solo et en réseau.
 
   ```bash
   lua startup_proxy/tests/test_salon.lua

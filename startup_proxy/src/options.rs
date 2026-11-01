@@ -180,7 +180,7 @@ pub(crate) type LuaCFn = unsafe extern "C-unwind" fn(*mut c_void) -> i32;
 pub(crate) struct Hks {
     push_fstring: unsafe extern "C-unwind" fn(*mut c_void, *const c_char, ...) -> *const c_char,
     pub(crate) push_integer: unsafe extern "C-unwind" fn(*mut c_void, i32),
-    push_nil: unsafe extern "C-unwind" fn(*mut c_void),
+    pub(crate) push_nil: unsafe extern "C-unwind" fn(*mut c_void),
     pub(crate) to_lstring: unsafe extern "C-unwind" fn(*mut c_void, i32, *mut usize) -> *const c_char,
     push_closure: unsafe extern "C-unwind" fn(*mut c_void, LuaCFn, i32, *const c_char, i32),
     set_field: unsafe extern "C-unwind" fn(*mut c_void, i32, *const c_char),
@@ -324,6 +324,10 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
             (patch_options_lua(src), "options : onglet des proxys ajouté")
         }
         crate::salon::SCRIPT => (crate::salon::prepare(l, src), "salon : annonce de version ajoutée"),
+        crate::salon::SCRIPT_PARTIE => (crate::salon::prepare_partie(l, src), "partie : relais du verdict ajouté"),
+        crate::salon::SCRIPT_CHARGEMENT => {
+            (crate::salon::prepare_chargement(l, src), "chargement : correctifs POL des parties locales ajoutés")
+        }
         crate::maj::SCRIPT => (crate::maj::prepare(l, src), "maj : notification de mise à jour ajoutée"),
         _ => return real(l, buf, size, name),
     };

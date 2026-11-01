@@ -54,6 +54,7 @@ print(f"originale : {got:#x} (projection préalable en {base:#x}), état {status
 print("journal :\n  " + open(log_file, encoding="utf-8").read().strip().replace("\n", "\n  "))
 assert got == base, "le proxy n'a pas récupéré l'originale"
 assert status() & 0xB == 0xB, "les détours n'ont pas été posés"
+assert status() & 0x10, "les correctifs POL n'ont pas été posés"
 
 SITES = (  # nom, RVA, prologue d'origine
     ("instantané", 0x72F80, "48895c2410574883ec304863da8bf9"),
@@ -63,6 +64,7 @@ SITES = (  # nom, RVA, prologue d'origine
     ("amélioration", 0x260720, "41564883ec304d8bf04d85c07509"),
     ("rendement", 0x37EC60, "44894424185553574154415541564157"),
     ("attente IA", 0x4A16E0, "40534883ec30488d05d34852"),
+    ("citoyens", 0x10F050, "4c8bdc45894b204989531049894b08"),
     ("promotion de gouverneur", 0x2DF340, "48895c240848896c2410488974241857"),
     ("retrait de gouverneur", 0x2DF800, "48895c2408488974241048897c2418"),
     ("établissement de gouverneur", 0x259B10, "4c8bdc4989732055498dabb8feffff"),
