@@ -434,6 +434,34 @@ refuse : la merveille est retirée.
   Il change une règle chez un seul joueur et désynchronise la partie si les autres ne l'ont pas. Il
   n'est plus compilé ; son en-tête dit comment le rebrancher.
 
+## Rendements d'empire après un gouverneur ou un personnage illustre
+
+[src/rendements_empire.rs](src/rendements_empire.rs) et [src/ui_rendements.lua](src/ui_rendements.lua),
+réglage `ui_rendements=on|off` (`-UiRendements`), on par défaut. Analyse et traces :
+[empire_yields/README.md](../empire_yields/README.md).
+
+- **Le défaut.** Après un titre de gouverneur, un déplacement de gouverneur ou un personnage
+  illustre, le bandeau du haut garde ses anciens rendements jusqu'à un changement de citoyen.
+  GameCore calcule pourtant les bons : ce sont les instantanés de l'interface qui ne sont pas
+  refaits, ou refaits avant que l'action ne soit appliquée.
+- **Côté GameCore.** Quatre détours notent le joueur local : promotion (`1802df340`), retrait
+  (`1802df800`) et établissement (`180259b10`) d'un gouverneur, activation d'un personnage illustre
+  (`180655560`). Une fois l'action appliquée, on appelle les gestionnaires de cache qu'un
+  changement de citoyen déclenche (`0xc2f385c0`) : villes (`180072f80`), culture, foi, sciences,
+  trésor. À la sortie de l'action, ou à la fin de la passe de `Game_Processor` (`18004afc0`) si
+  elle s'y exécute : détour de `coalesce`, posé pour ce réglage même en mode Off ou en portée
+  `cascade`.
+- **Côté interface.** `ui_rendements.lua`, ajouté à `TopPanel.lua` : `OnRefreshYields` sur les
+  événements de gouverneur et de personnage illustre, puis encore à `GameCoreEventPublishComplete`.
+- **Sans désynchro.** Les gestionnaires ne font que lire l'état de jeu et poster un instantané à
+  l'interface. Aucun événement Lua, aucune commande : face à des joueurs sans proxy aussi.
+- **Journal :** `rendements d'empire : détours posés …`, puis, pour les 10 premiers de chaque
+  partie, `rendements d'empire : <action> du joueur N, rafraîchi en fin de l'action|de passe` et
+  `instantanés refaits pour le joueur N`, et
+  `ui : …TopPanel.lua : rendements redessinés …`.
+- **Tests.** `cargo test` (enregistrement d'événement, patch du vrai `TopPanel.lua`) ;
+  `check_hooks.py` vérifie la pose et la restauration des quatre détours.
+
 ## Limites du prototype
 
 - **Un seul build du jeu.** Les adresses sont celles de GameCore_XP2 FinalRelease

@@ -40,6 +40,7 @@ pub(crate) fn real_module() -> usize {
         coalesce::on_gamecore_loaded(h);
         crate::improvements::on_gamecore_loaded(h);
         crate::rendements::on_gamecore_loaded(h);
+        crate::rendements_empire::on_gamecore_loaded(h);
         crate::tours::on_gamecore_loaded(h);
         crate::wmd::on_gamecore_loaded(h);
         crate::ui::on_gamecore_loaded();
@@ -74,6 +75,7 @@ macro_rules! forward {
                 // Nouvelle partie : les mémoires de la précédente ne valent plus.
                 crate::improvements::reset();
                 crate::wmd::reset();
+                crate::rendements_empire::reset();
             }
             let p = resolve(&CACHE, concat!($name, "\0").as_bytes());
             if p == 0 {

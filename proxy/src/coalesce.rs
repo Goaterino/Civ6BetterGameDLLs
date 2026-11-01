@@ -13,6 +13,10 @@
 //! - avec `portee=message`, aussi `18004afc0` (Game_Processor), une passe de traitement d'un
 //!   message `GameUpdate`. Sa fermeture précède `18007bbe0`, qui expédie les caches à l'interface.
 //!
+//! Le détour de la passe est aussi posé pour `rendements_empire` (`ui_rendements=on`), même en
+//! mode Off ou avec `portee=cascade` : il appelle alors seulement `rendements_empire::after_step`
+//! à la fin de la passe la plus externe.
+//!
 //! L'état de portée est un statique protégé par un verrou, rattaché au thread qui l'a ouverte :
 //! pas de `thread_local!`, dont les destructeurs survivraient au déchargement du proxy.
 
@@ -223,13 +227,26 @@ unsafe extern "system" fn hook_declare_war(this: usize, target: usize, reason: u
     leave();
 }
 
+/// Passes de `Game_Processor` en cours : `rendements_empire` n'agit qu'à la fin de la plus externe.
+static STEP_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+/// Vrai pendant une passe de `Game_Processor` (détour posé).
+pub fn in_step() -> bool {
+    STEP_DEPTH.load(Ordering::Relaxed) != 0
+}
+
 unsafe extern "system" fn hook_step(a: usize, b: usize, c: usize, d: usize) -> usize {
     let f: StepFn = std::mem::transmute(TRAMP_STEP.load(Ordering::Relaxed));
-    if !enter(false) {
-        return f(a, b, c, d);
-    }
+    // Le détour sert aussi à `rendements_empire` : la portée n'est ouverte qu'avec `portee=message`.
+    let scoped = mode() != Mode::Off && scope() == Scope::Message && enter(false);
+    STEP_DEPTH.fetch_add(1, Ordering::Relaxed);
     let r = f(a, b, c, d);
-    leave();
+    if scoped {
+        leave();
+    }
+    if STEP_DEPTH.fetch_sub(1, Ordering::Relaxed) == 1 {
+        crate::rendements_empire::after_step();
+    }
     r
 }
 
@@ -307,11 +324,29 @@ unsafe fn finish(p: Pending) {
 
 /// Appelé quand l'originale vient d'être chargée, avant le premier appel relayé.
 pub unsafe fn on_gamecore_loaded(base: usize) {
+    let refresh = crate::rendements_empire::enabled();
     if mode() == Mode::Off {
-        log("originale chargée, mode Off : aucun détour");
+        if !refresh {
+            log("originale chargée, mode Off : aucun détour");
+            return;
+        }
+        // Seule la passe est détournée, pour `rendements_empire`.
+        if let Err(e) = patch::check(base, &[STEP]) {
+            log(&format!("originale chargée en {base:#x}, mode Off, passe inattendue, aucun détour : {e}"));
+            return;
+        }
+        match patch::install(base, &STEP, hook_step as *const () as usize) {
+            Ok(t) => {
+                TRAMP_STEP.store(t, Ordering::Relaxed);
+                STEP_HOOKED.store(1, Ordering::Relaxed);
+                HOOKED_BASE.store(base, Ordering::Relaxed);
+                log(&format!("originale chargée en {base:#x}, mode Off : seule la passe est détournée (rendements d'empire)"));
+            }
+            Err(e) => log(&format!("échec de la pose du détour de la passe : {e}")),
+        }
         return;
     }
-    let with_step = scope() == Scope::Message;
+    let with_step = scope() == Scope::Message || refresh;
     let sites = [SNAPSHOT, DIPLO, DECLARE_WAR, STEP];
     if let Err(e) = patch::check(base, &sites) {
         log(&format!("originale chargée en {base:#x}, version inattendue, aucun détour : {e}"));

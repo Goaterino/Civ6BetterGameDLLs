@@ -14,6 +14,8 @@ détours dans GameCore et dans l'exe, et les analyses qui l'ont motivé. Sépar�
   bonus plats de gouvernement (fascisme), corrigé dans le proxy ;
 - [wonder_queue](wonder_queue/README.md) : merveille retirée de la file de production après deux
   échanges, rattrapée par l'interface du proxy sans désynchro ;
+- [empire_yields](empire_yields/README.md) : rendements d'empire du bandeau figés après un gouverneur ou
+  un personnage illustre, rafraîchis par le proxy sans désynchro ;
 - [map_pins](map_pins/README.md) : lag des épingles de carte en multijoueur (analyse statique) ;
 - [pantheon](pantheon/README.md) : joueur désigné pour le panthéon, égalités et restriction d'un tour
   (analyse statique) ;

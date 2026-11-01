@@ -151,6 +151,13 @@ local PROXY_REGLAGES = {
 			"A wonder removed from the production queue by a swap is put back, through normal game commands: no desync, even against players without the proxy.",
 		},
 		choix = PROXY_ON_OFF },
+	{ cle = "ui_rendements", defaut = "on",
+		nom = { "Rendements d'empire à jour après un gouverneur ou un personnage illustre", "Empire yields updated after a governor or great person" },
+		aide = {
+			"Le bandeau du haut se met à jour après un titre de gouverneur, un déplacement de gouverneur ou un personnage illustre, sans changer un citoyen. Affichage seulement : pas de désynchronisation.",
+			"The top bar updates after a governor title, a governor move or a great person, without changing a citizen. Display only: no desync.",
+		},
+		choix = PROXY_ON_OFF },
 
 	{ titre = { "Diagnostic", "Diagnostics" } },
 	{ cle = "ui_journal", defaut = "off",

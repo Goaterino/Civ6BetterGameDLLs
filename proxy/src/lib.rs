@@ -8,7 +8,8 @@
 //! (coalesce par défaut), `portee=cascade|message` (cascade par défaut),
 //! `ameliorations=off|count|verify|fast|quiet` et `rendements=off|count|verify|fast|quiet` (off par
 //! défaut), `wmd_accel=<facteur>|off` (20 par défaut, voir `wmd`), `ui_boutons`, `ui_recentrage` et
-//! `ui_journal`, `ui_mesure_epingles`, `ui_epingles`, `ui_merveilles` (voir `ui`), `tours_production=on|off` (on par défaut, voir `tours`). Journal :
+//! `ui_journal`, `ui_mesure_epingles`, `ui_epingles`, `ui_merveilles` (voir `ui`), `ui_rendements=on|off`
+//! (on par défaut, voir `rendements_empire`), `tours_production=on|off` (on par défaut, voir `tours`). Journal :
 //! `%LOCALAPPDATA%\Civ6RolloverProxy\RolloverProxy.log`, hors du dossier Logs du jeu.
 
 #![allow(non_snake_case)] // le nom de la DLL produite, GameCore_XP2_FinalRelease, est imposé.
@@ -19,6 +20,7 @@ mod forward;
 mod improvements;
 mod patch;
 mod rendements;
+mod rendements_empire;
 mod tours;
 mod ui;
 mod win;
@@ -139,6 +141,9 @@ pub(crate) fn read_config() {
         if let Some(v) = line.trim().strip_prefix("ui_merveilles=") {
             ui::set_merveilles(v.trim() != "off");
         }
+        if let Some(v) = line.trim().strip_prefix("ui_rendements=") {
+            rendements_empire::set_enabled(v.trim() != "off");
+        }
     }
 }
 
@@ -156,6 +161,7 @@ pub unsafe extern "system" fn DllMain(module: win::HMODULE, reason: u32, reserve
             coalesce::on_proxy_unload();
             improvements::on_proxy_unload();
             rendements::on_proxy_unload();
+            rendements_empire::on_proxy_unload();
             tours::on_proxy_unload();
             wmd::on_proxy_unload();
             ui::on_proxy_unload();

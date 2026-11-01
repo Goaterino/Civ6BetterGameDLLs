@@ -25,7 +25,10 @@
 //!   de GetMapPins par joueur et par reconstruction, liste fermée reconstruite à son ouverture ;
 //! - `ui_merveilles=on|off` (on) : ajoute `ui_merveilles.lua` à ProductionHelper.lua. Une merveille
 //!   retirée de la file par un échange (wonder_queue/README.md) est remise en tête par des commandes
-//!   du jeu, rejouées à l'identique par tous les joueurs, proxy ou non.
+//!   du jeu, rejouées à l'identique par tous les joueurs, proxy ou non ;
+//! - `ui_rendements=on|off` (on, lu par `rendements_empire`) : ajoute `ui_rendements.lua` à
+//!   TopPanel.lua. Le bandeau redessine ses rendements après un gouverneur ou un personnage
+//!   illustre, dont `rendements_empire` refait les instantanés (empire_yields/README.md).
 //!
 //! Dès que l'accroche Lua est posée, trois défauts du jeu sont aussi corrigés (`FIXES`) : le bouton
 //! d'attaque d'une ville non sélectionnée demandait deux clics (`patch_city_panel`), un clic sur le
@@ -44,6 +47,7 @@ const XML_BLOCK: &str = include_str!("ui_boutons.xml");
 const MESURE_BLOCK: &str = include_str!("ui_epingles.lua");
 const OPTI_BLOCK: &str = include_str!("ui_epingles_opti.lua");
 const MERVEILLES_BLOCK: &str = include_str!("ui_merveilles.lua");
+const RENDEMENTS_BLOCK: &str = include_str!("ui_rendements.lua");
 
 static BOUTONS: AtomicBool = AtomicBool::new(true);
 static RECENTRAGE: AtomicBool = AtomicBool::new(false);
@@ -91,6 +95,7 @@ fn active() -> bool {
         || MESURE.load(Ordering::Relaxed)
         || OPTI.load(Ordering::Relaxed)
         || MERVEILLES.load(Ordering::Relaxed)
+        || crate::rendements_empire::enabled()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -348,6 +353,22 @@ pub fn patch_merveilles(src: &[u8]) -> Vec<u8> {
     out
 }
 
+/// TopPanel.lua suivi de `ui_rendements.lua`, qui appelle `OnRefreshYields` : le fichier doit la
+/// définir. BSM (TopPanel_Spectator.lua) et les extensions incluent ce fichier, ils en profitent.
+pub fn patch_top_panel(src: &[u8]) -> Result<Vec<u8>, String> {
+    let has = |pat: &str| src.windows(pat.len()).any(|w| w == pat.as_bytes());
+    if !has("function OnRefreshYields(") {
+        return Err("OnRefreshYields introuvable".into());
+    }
+    if has("Civ6RolloverProxy (src/ui_rendements.lua)") {
+        return Err("déjà corrigé".into());
+    }
+    let mut out = src.to_vec();
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(RENDEMENTS_BLOCK.as_bytes());
+    Ok(out)
+}
+
 type Fix = fn(&[u8]) -> Result<Vec<u8>, String>;
 
 /// Corrections appliquées dès que l'accroche Lua est posée : fichier, correction, journal.
@@ -430,6 +451,22 @@ unsafe extern "C" fn hook_loadbuffer(l: *mut c_void, buf: *const u8, size: usize
             if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }
         ));
         return r;
+    }
+    if crate::rendements_empire::enabled() && is_file(&chunk, "TopPanel.lua") {
+        return match patch_top_panel(std::slice::from_raw_parts(buf, size)) {
+            Ok(text) => {
+                let r = real(l, text.as_ptr(), text.len(), name);
+                log(&format!(
+                    "ui : {chunk} : rendements redessinés après gouverneur ou personnage illustre, compilation {}",
+                    if r == 0 { "réussie".to_string() } else { format!("en échec ({r})") }
+                ));
+                r
+            }
+            Err(e) => {
+                log(&format!("ui : {chunk} laissé tel quel : {e}"));
+                real(l, buf, size, name)
+            }
+        };
     }
     for (file, patch, what) in FIXES {
         if !is_file(&chunk, file) {
@@ -536,7 +573,7 @@ pub unsafe fn on_gamecore_loaded() {
     }
     IAT_SLOT.store(slot, Ordering::Relaxed);
     log(&format!(
-        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}, mesure des épingles {}, épingles allégées {}, merveilles {}",
+        "ui : accroches posées (lecture XML {}), boutons {}, recentrage {}, journal {}, mesure des épingles {}, épingles allégées {}, merveilles {}, rendements {}",
         if XML_TRAMP.load(Ordering::Relaxed) != 0 { "oui" } else { "non" },
         if BOUTONS.load(Ordering::Relaxed) { "on" } else { "off" },
         if RECENTRAGE.load(Ordering::Relaxed) { "on" } else { "off" },
@@ -544,6 +581,7 @@ pub unsafe fn on_gamecore_loaded() {
         if MESURE.load(Ordering::Relaxed) { "on" } else { "off" },
         if OPTI.load(Ordering::Relaxed) { "on" } else { "off" },
         if MERVEILLES.load(Ordering::Relaxed) { "on" } else { "off" },
+        if crate::rendements_empire::enabled() { "on" } else { "off" },
     ));
 }
 
@@ -712,6 +750,17 @@ mod tests {
     #[test]
     fn drapeaux_du_jeu() {
         check_flags(format!(r"{GAME}\Base\Assets\UI\UnitFlagManager.lua"));
+    }
+
+    #[test]
+    fn top_panel_du_jeu() {
+        let Some(src) = read(format!(r"{GAME}\DLC\Expansion2\UI\Replacements\TopPanel.lua")) else { return };
+        let new = patch_top_panel(&src).unwrap();
+        assert!(new.starts_with(&src) && new.ends_with(RENDEMENTS_BLOCK.as_bytes()));
+        assert!(patch_top_panel(&new).is_err(), "pas deux fois");
+        assert!(patch_top_panel(b"function RefreshYields() end").is_err());
+        assert!(is_file(r"C:\x\DLC\Expansion2\UI\Replacements\TopPanel.lua", "TopPanel.lua"));
+        assert!(!is_file("ui/topPanel_spectator.lua", "TopPanel.lua"));
     }
 
     #[test]

@@ -63,6 +63,10 @@ SITES = (  # nom, RVA, prologue d'origine
     ("amélioration", 0x260720, "41564883ec304d8bf04d85c07509"),
     ("rendement", 0x37EC60, "44894424185553574154415541564157"),
     ("attente IA", 0x4A16E0, "40534883ec30488d05d34852"),
+    ("promotion de gouverneur", 0x2DF340, "48895c240848896c2410488974241857"),
+    ("retrait de gouverneur", 0x2DF800, "48895c2408488974241048897c2418"),
+    ("établissement de gouverneur", 0x259B10, "4c8bdc4989732055498dabb8feffff"),
+    ("personnage illustre", 0x655560, "4c8944241848894c2408555356574154"),
 )
 for name, rva, _ in SITES:
     patch = ctypes.string_at(base + rva, 14)
