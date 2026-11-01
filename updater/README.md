@@ -40,7 +40,7 @@ GitHub (voir [release/README.md](../release/README.md)). Il est publié avec cha
 - **Droits** : si le dossier du jeu n'est pas modifiable (Program Files), seule la pose est relancée
   en administrateur (`--apply`, invite UAC, sans fenêtre), qui revérifie signature et SHA-256 avant
   de copier.
-- **Emplacement fixe** : après chaque installation, l'installeur se copie dans
+- **Emplacement fixe** : à l'ouverture de sa fenêtre et après chaque installation, l'installeur se copie dans
   `%LOCALAPPDATA%\BetterGameDLLs\BetterGameDLLs.exe`, s'il n'y tourne pas déjà. La notification du
   jeu le lance là, et l'option de lancement Steam proposée le désigne : peu importe où le joueur a
   téléchargé l'exe, et la copie suit le dernier installeur lancé.

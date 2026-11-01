@@ -172,6 +172,28 @@ unsafe extern "C-unwind" fn lua_update(l: *mut std::ffi::c_void) -> i32 {
 
 pub const NATIVES: Natives = &[(lua_update, b"Civ6Proxy_MiseAJour\0"), (crate::salon::lua_log, b"Civ6Proxy_Journal\0")];
 
+pub const XML: &str = "MainMenu.xml";
+
+/// MainMenu.xml avec l'instance du popup du menu, s'il ne l'a pas : celui de MPH inclut le modèle
+/// `PopupDialog` sans l'instancier, et son Lua ne crée pas `g_PopupDialog`. On ajoute, comme le XML du
+/// jeu, `<MakeInstance Name="PopupDialog" />` à la fin du contexte (et le modèle s'il manque) : le bloc
+/// Lua crée alors son popup sur ces contrôles. `None` si le menu a déjà le sien.
+pub fn patch_main_menu_xml(src: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let text = std::str::from_utf8(src).map_err(|_| "texte non UTF-8".to_string())?;
+    if text.contains(r#"<MakeInstance Name="PopupDialog""#) {
+        return Ok(None);
+    }
+    let end = text.rfind("</ContextDefaults>").ok_or("fin du contexte introuvable")?;
+    let mut out = String::with_capacity(text.len() + 100);
+    out.push_str(&text[..end]);
+    if !text.contains(r#"<Include File="PopupDialog""#) {
+        out.push_str("  <Include File=\"PopupDialog\" />\r\n");
+    }
+    out.push_str("  <MakeInstance Name=\"PopupDialog\" />\r\n");
+    out.push_str(&text[end..]);
+    Ok(Some(out.into_bytes()))
+}
+
 /// MainMenu.lua suivi du bloc de la notification.
 pub fn patch_main_menu_lua(src: &[u8]) -> Vec<u8> {
     let mut out = src.to_vec();
@@ -214,6 +236,35 @@ mod tests {
         assert!(config_enabled("actif=on\r\nverif_maj=on\r\n"));
         assert!(!config_enabled("verif_maj=off\r\n"));
         assert!(config_enabled("verif_maj=off\r\nverif_maj=on\r\n"));
+    }
+
+    #[test]
+    fn popup_ajoute_au_menu_sans_popup() {
+        let base = "<ContextDefaults>\r\n  <Include File=\"PopupDialog\" />\r\n  <MakeInstance Name=\"PopupDialog\" />\r\n</ContextDefaults>";
+        assert_eq!(patch_main_menu_xml(base.as_bytes()), Ok(None));
+        let mph = "<ContextDefaults>\r\n  <Include File=\"PopupDialog\" />\r\n  <Stack ID=\"A\" />\r\n</ContextDefaults>";
+        let out = String::from_utf8(patch_main_menu_xml(mph.as_bytes()).unwrap().unwrap()).unwrap();
+        assert!(out.ends_with("<Stack ID=\"A\" />\r\n  <MakeInstance Name=\"PopupDialog\" />\r\n</ContextDefaults>"), "{out}");
+        assert_eq!(out.matches("<Include File=\"PopupDialog\"").count(), 1);
+        let nu = "<ContextDefaults>\r\n</ContextDefaults>";
+        let out = String::from_utf8(patch_main_menu_xml(nu.as_bytes()).unwrap().unwrap()).unwrap();
+        assert!(out.contains("<Include File=\"PopupDialog\" />\r\n  <MakeInstance"), "{out}");
+        assert!(patch_main_menu_xml(b"<Context>").is_err());
+    }
+
+    /// Les vrais fichiers du jeu et de MPH, s'ils sont là.
+    #[test]
+    fn vrais_menus() {
+        let steam = r"C:\Program Files (x86)\Steam\steamapps";
+        let base = format!(r"{steam}\common\Sid Meier's Civilization VI\Base\Assets\UI\FrontEnd\MainMenu.xml");
+        if let Ok(src) = std::fs::read(&base) {
+            assert_eq!(patch_main_menu_xml(&src), Ok(None), "le menu du jeu a déjà son popup");
+        }
+        let mph = format!(r"{steam}\workshop\content\289070\3307282026\ui\mainmenu.xml");
+        if let Ok(src) = std::fs::read(&mph) {
+            let out = String::from_utf8(patch_main_menu_xml(&src).unwrap().unwrap()).unwrap();
+            assert!(out.trim_end().ends_with("<MakeInstance Name=\"PopupDialog\" />\r\n</ContextDefaults>"));
+        }
     }
 
     #[test]

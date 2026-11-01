@@ -51,6 +51,9 @@ fn failed(e: &str) -> i32 {
 }
 
 fn interactive(game: Option<PathBuf>) -> i32 {
+    // Dès l'ouverture, pas seulement après une installation : un joueur déjà à jour, qui ouvre un
+    // installeur plus récent, met aussi à jour celui que la notification du jeu lance.
+    copy_self();
     match menu(game) {
         Ok(()) => 0,
         Err(e) => failed(&e),

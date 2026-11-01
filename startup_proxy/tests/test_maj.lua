@@ -20,7 +20,7 @@ end
 -- `etat` : "" (en cours), nil (rien), ou { "0.1.2", "0.1.1" } ; `installeur` : 1 ou 0.
 local function NewMenu(options)
 	options = options or {};
-	local m = { etat = options.etat, calls = {}, journal = {}, shown = 0, updates = 0, exited = false };
+	local m = { etat = options.etat, calls = {}, journal = {}, includes = {}, shown = 0, updates = 0, exited = false };
 	local popup = { open = options.popupOuvert or false, buttons = {}, texts = {} };
 	function popup:IsOpen() return self.open; end
 	function popup:Reset() self.buttons = {}; self.texts = {}; self.title = nil; end
@@ -38,15 +38,33 @@ local function NewMenu(options)
 	m.popup = popup;
 
 	local env = {
-		string = string, type = type, pcall = pcall, tostring = tostring, table = table, ipairs = ipairs,
+		string = string, type = type, pcall = pcall, error = error, tostring = tostring, table = table, ipairs = ipairs,
 		g_PopupDialog = popup,
 		PopupDialog = { COMMAND_CONFIRM = "confirm", COMMAND_CANCEL = "cancel" },
 		Locale = { GetCurrentLanguage = function() return { Type = options.lang or "fr_FR" }; end },
-		UI = { ExitGame = function() m.exited = true; end },
+		-- UI.ExitGame ne ferme pas le jeu depuis le menu principal : le bloc ne doit pas s'en servir.
+		UI = { ExitGame = function() m.exitGame = true; end },
+		Events = { UserConfirmedClose = function() m.exited = true; end },
+		Network = { GetFriends = function() return { ClearRichPresence = function() m.presence = true; end }; end },
 		OnShow = function() m.shown = m.shown + 1; m.env.ContextPtr:SetUpdate(m.env.OnUpdate); end,
 		OnUpdate = function() m.updates = m.updates + 1; end,
 		Civ6Proxy_Journal = function(t) table.insert(m.journal, t); end,
+		Controls = {},
 	};
+	-- MainMenu de MPH : ni g_PopupDialog, ni PopupDialog, ni OnUpdate ; le XML a l'instance du popup
+	-- (ajoutée par le proxy), et include("PopupDialog") définit la classe.
+	if options.mph then
+		env.g_PopupDialog = nil;
+		env.PopupDialog = nil;
+		env.OnUpdate = nil;
+		env.OnShow = function() m.shown = m.shown + 1; end
+		if not options.sansInstance then env.Controls.PopupRoot = {}; end
+		env.include = function(name)
+			table.insert(m.includes, name);
+			env.PopupDialog = { COMMAND_CONFIRM = "confirm", COMMAND_CANCEL = "cancel" };
+			function env.PopupDialog:new(id) m.popupId = id; return popup; end
+		end
+	end
 	if not options.sansProxy then
 		env.Civ6Proxy_MiseAJour = function(action)
 			table.insert(m.calls, action or "?");
@@ -87,7 +105,8 @@ do
 	m.Frame();
 	check(m.opened == 1, "une seule fois");
 	check(m.popup:Click("Mettre à jour"), "clic Mettre à jour");
-	check(m.calls[#m.calls] == "installer" and m.exited, "installeur lancé, jeu fermé");
+	check(m.calls[#m.calls] == "installer" and m.exited and not m.exitGame, "installeur lancé, jeu fermé comme Quitter vers le bureau");
+	check(m.presence, "présence Steam effacée");
 end
 
 do
@@ -138,6 +157,27 @@ end
 do
 	local m = NewMenu({ sansProxy = true });
 	check(m.showHandler == m.env.OnShow, "sans native : menu laissé tel quel");
+end
+
+do
+	-- Menu de MPH : popup créé par le bloc.
+	local m = NewMenu({ etat = "", mph = true });
+	m.Show(); m.Frame();
+	check(m.shown == 1 and m.updates == 0, "MPH : OnShow appelé, pas d'OnUpdate");
+	check(m.opened == nil and #m.includes == 0, "MPH : en cours, rien de créé");
+	m.etat = { "0.1.2", "0.1.1" };
+	m.Frame();
+	check(m.includes[1] == "PopupDialog" and m.popupId == "BGD_MajPopup", "MPH : PopupDialog chargé, popup créé");
+	check(m.opened == 1 and #m.popup.buttons == 2, "MPH : notification ouverte");
+	m.popup:Click("Mettre à jour");
+	check(m.exited, "MPH : installeur lancé, jeu fermé");
+end
+
+do
+	-- Menu sans popup ni instance : erreur au journal, pas d'attente silencieuse.
+	local m = NewMenu({ etat = { "0.1.2", "0.1.1" }, mph = true, sansInstance = true });
+	m.Show(); m.Frame();
+	check(m.opened == nil and m.journal[#m.journal]:find("pas de popup", 1, true), "sans instance : erreur au journal");
 end
 
 if failures == 0 then

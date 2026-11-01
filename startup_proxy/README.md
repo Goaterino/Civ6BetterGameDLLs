@@ -151,11 +151,16 @@ dans le chat.
   après avoir posé `Civ6Proxy_MiseAJour([action])` et `Civ6Proxy_Journal(texte)`. Le bloc enveloppe
   le gestionnaire d'affichage du menu, et, tant que la notification reste à montrer, sa mise à jour
   par image : il attend la fin de la vérification, et la fermeture d'un autre message du menu.
-- **Le message**, dans le popup du menu (`g_PopupDialog`), en français ou en anglais selon la langue
+- **Un menu remplacé par un mod.** Le `MainMenu` de MPH n'a ni `g_PopupDialog` ni `OnUpdate` : son
+  XML inclut le modèle `PopupDialog` sans l'instancier. L'accroche XML ajoute alors
+  `<MakeInstance Name="PopupDialog" />` à la fin de `MainMenu.xml` (et le modèle s'il manque), comme
+  le XML du jeu, et le bloc crée son popup sur ces contrôles (`include("PopupDialog")`). Sans ces
+  contrôles, l'erreur va au journal.
+- **Le message**, dans le popup du menu (`g_PopupDialog`, ou le sien), en français ou en anglais selon la langue
   du jeu : « La version 0.1.2 de BetterGameDLLs est disponible (installée : 0.1.1) ».
   - **Mettre à jour** lance l'installeur, `%LOCALAPPDATA%\BetterGameDLLs\BetterGameDLLs.exe`
     (il s'y copie à chaque installation), avec `--after-game <dossier de l'exe>`, puis ferme le jeu
-    (`UI.ExitGame()`). L'installeur attend la fin du jeu, installe, et propose de le relancer.
+    (`Events.UserConfirmedClose()`, comme « Quitter vers le bureau » ; `UI.ExitGame()` ne ferme le jeu qu'en partie). L'installeur attend la fin du jeu, installe, et propose de le relancer.
     Sans installeur à cet endroit, la page de la release s'ouvre dans le navigateur, et le jeu reste
     ouvert.
   - **Plus tard** (ou Échap) : plus de notification jusqu'au prochain lancement du jeu.
